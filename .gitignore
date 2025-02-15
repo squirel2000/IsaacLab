@@ -62,5 +62,5 @@ _build
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
 
-# Imitation
-datasets/
+# Teleop Recorded Dataset
+datasets
