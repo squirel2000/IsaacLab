@@ -45,14 +45,13 @@ class QuadcopterEnvWindow(BaseEnvWindow):
                     # add command manager visualization
                     self._create_debug_vis_ui_element("targets", self.env)
 
-
 @configclass
 class QuadcopterEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 10.0
     decimation = 2
     action_space = 5  # Modified: action space increased to 5 to control yaw
-    observation_space = 14 # Modified: observation space increased to include yaw information
+    observation_space = 14  # Modified: observation space increased to include yaw information
     state_space = 0
     debug_vis = True
 
@@ -85,19 +84,19 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.5, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=8192, env_spacing=2.5, replicate_physics=True)
 
     # robot
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     thrust_to_weight = 1.9
     moment_scale = 0.01
-    yaw_moment_scale = 0.005 # Modified: scale for yaw moment control
+    yaw_moment_scale = 0.005  # Modified: scale for yaw moment control
 
     # reward scales
     lin_vel_reward_scale = -0.05
     ang_vel_reward_scale = -0.01
     distance_to_goal_reward_scale = 15.0
-    yaw_reward_scale = 2.0 # Modified: reward scale for yaw control
+    yaw_reward_scale = 2.0  # Modified: reward scale for yaw control
 
 
 class QuadcopterEnv(DirectRLEnv):
@@ -113,7 +112,7 @@ class QuadcopterEnv(DirectRLEnv):
         # Goal position
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         # Goal yaw
-        self._desired_yaw_w = torch.zeros(self.num_envs, 1, device=self.device) # Modified: desired yaw
+        self._desired_yaw_w = torch.zeros(self.num_envs, 1, device=self.device)  # Modified: desired yaw
 
         # Logging
         self._episode_sums = {
@@ -122,7 +121,8 @@ class QuadcopterEnv(DirectRLEnv):
                 "lin_vel",
                 "ang_vel",
                 "distance_to_goal",
-                "yaw_alignment", # Modified: logging yaw reward
+                "yaw_alignment",  # Modified: logging yaw reward
+                # "died_penalty",  # Add the penalty
             ]
         }
         # Get specific body indices
@@ -131,7 +131,7 @@ class QuadcopterEnv(DirectRLEnv):
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
 
-        # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
+        # Add handle for debug visualization
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
@@ -194,12 +194,16 @@ class QuadcopterEnv(DirectRLEnv):
         yaw_error = torch.minimum(yaw_error, 2 * torch.pi - yaw_error)  # handle wrap-around
         yaw_alignment_mapped = 1 - torch.tanh(yaw_error / 0.4)  # Scale and map yaw error
 
+        # Large penalty for the died condition
+        # died_penalty = torch.where(distance_to_goal > 2.5, torch.tensor(-100.0, device=self.device), torch.tensor(0.0, device=self.device))
+
         # Ensure all tensors have the same shape
         rewards = {
             "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
             "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * self.step_dt,
             "distance_to_goal": distance_to_goal_mapped * self.cfg.distance_to_goal_reward_scale * self.step_dt,
             "yaw_alignment": yaw_alignment_mapped.squeeze(-1) * self.cfg.yaw_reward_scale * self.step_dt,  # Fix shape
+            # "died_penalty": died_penalty,  # Add the penalty
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -209,9 +213,36 @@ class QuadcopterEnv(DirectRLEnv):
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # Check if the position (x, y, z) is within 0.1 m of the goal
+        position_error = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
+        position_reached = position_error < 0.1
+
+        # Check if the yaw error is within 10 degrees
+        current_quat_w = self._robot.data.root_state_w[:, 3:7]
+        current_euler_w = torch.stack(euler_xyz_from_quat(current_quat_w), dim=-1)
+        current_yaw_w = current_euler_w[:, 2].unsqueeze(-1)
+        yaw_error = torch.abs(current_yaw_w - self._desired_yaw_w)
+        yaw_error = torch.minimum(yaw_error, 2 * torch.pi - yaw_error)  # Handle wrap-around
+        yaw_reached = yaw_error < torch.deg2rad(torch.tensor(10.0, device=self.device))
+
+        # Combine position and yaw conditions
+        goal_reached = torch.logical_and(position_reached, yaw_reached.squeeze(-1))
+
+        # Timeout or death conditions
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        return died, time_out
+        died = position_error > 2.5  # Died if the position error exceeds 2.5 m
+
+        # Done if goal is reached, timeout, or death
+        done = torch.logical_or(goal_reached, torch.logical_or(time_out, died))
+        
+        # if done, print the goal/current position and yaw direction
+        if torch.any(goal_reached) and self.cfg.debug_vis and not hasattr(self, "goal_pos_visualizer"):
+            for i in range(len(done)):
+                if done[i]:
+                    print(f"Env {i} - Goal Pos: {self._desired_pos_w[i].cpu().numpy()}, Current Pos: {self._robot.data.root_pos_w[i].cpu().numpy()}")
+                    print(f"Env {i} - Goal Yaw: {self._desired_yaw_w[i].cpu().numpy()}, Current Yaw: {current_yaw_w[i].cpu().numpy()}")
+
+        return done, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
@@ -221,7 +252,7 @@ class QuadcopterEnv(DirectRLEnv):
         final_distance_to_goal = torch.linalg.norm(
             self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
         ).mean()
-        final_yaw_error = 0.0 # Placeholder, can be calculated if needed
+        final_yaw_error = 0.0  # Placeholder, can be calculated if needed
         extras = dict()
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
@@ -233,7 +264,7 @@ class QuadcopterEnv(DirectRLEnv):
         extras["Episode_Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
-        extras["Metrics/final_yaw_error"] = final_yaw_error # Placeholder
+        extras["Metrics/final_yaw_error"] = final_yaw_error  # Placeholder
         self.extras["log"].update(extras)
 
         self._robot.reset(env_ids)
@@ -247,7 +278,7 @@ class QuadcopterEnv(DirectRLEnv):
         self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
         self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
-        self._desired_yaw_w[env_ids, 0] = torch.zeros_like(self._desired_yaw_w[env_ids, 0]).uniform_(-torch.pi, torch.pi) # Modified: sample desired yaw
+        self._desired_yaw_w[env_ids, 0] = torch.zeros_like(self._desired_yaw_w[env_ids, 0]).uniform_(-torch.pi, torch.pi)  # Sample arbitrary yaw
 
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
@@ -282,13 +313,6 @@ class QuadcopterEnv(DirectRLEnv):
             if hasattr(self, "goal_yaw_visualizer"):
                 self.goal_yaw_visualizer.set_visibility(False)
 
-
     def _debug_vis_callback(self, event):
-        # update the markers
+        # Update the goal position marker
         self.goal_pos_visualizer.visualize(self._desired_pos_w)
-
-        # Visualize yaw direction (optional)
-        if hasattr(self, "goal_yaw_visualizer"):
-            goal_yaw_quats = quat_from_euler_xyz(torch.cat([torch.zeros_like(self._desired_yaw_w), torch.zeros_like(self._desired_yaw_w), self._desired_yaw_w], dim=-1))
-            goal_yaw_poses = torch.cat([self._desired_pos_w, goal_yaw_quats], dim=-1)
-            self.goal_yaw_visualizer.visualize(goal_yaw_poses)
