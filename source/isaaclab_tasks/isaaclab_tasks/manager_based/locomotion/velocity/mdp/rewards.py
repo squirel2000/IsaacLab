@@ -104,3 +104,28 @@ def track_ang_vel_z_world_exp(
     asset = env.scene[asset_cfg.name]
     ang_vel_error = torch.square(env.command_manager.get_command(command_name)[:, 2] - asset.data.root_ang_vel_w[:, 2])
     return torch.exp(-ang_vel_error / std**2)
+
+
+def straight_leg_bonus_on_flat(
+    env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), sensor_cfg: SceneEntityCfg = SceneEntityCfg("height_scanner"), flat_var_threshold: float = 0.01, offset: float = 0.5
+) -> torch.Tensor:
+    # Access the height scanner sensor
+    sensor = env.scene.sensors[sensor_cfg.name]
+    # Compute height scan as in the observation function
+    height_scan = sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2] - offset
+    # Compute variance
+    scan_var = torch.var(height_scan, dim=1)
+    # Detect flat terrain
+    is_flat = scan_var < flat_var_threshold
+    
+    # Get joint positions (assume knees are named "knee_joint")
+    asset = env.scene[asset_cfg.name]
+    knee_indices = [i for i, n in enumerate(asset.data.joint_names) if "knee" in n]
+    if len(knee_indices) == 0:
+        # If no knee joints, return zero reward
+        return torch.zeros(asset.data.joint_pos.shape[0], device=asset.data.joint_pos.device)
+    knee_angles = asset.data.joint_pos[:, knee_indices]
+    # Penalize bent knees, reward straight legs on flat
+    penalty = torch.sum(torch.abs(knee_angles), dim=1)
+    # Only apply when on flat
+    return penalty * is_flat.float()
