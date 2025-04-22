@@ -98,7 +98,16 @@ class G1Rewards(RewardsCfg):
         weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names="torso_joint")},
     )
-
+    # Penalize bent knees, reward straight legs on flat
+    straight_leg_bonus_on_flat = RewTerm(
+        func=mdp.straight_leg_bonus_on_flat,
+        weight=-0.1,  # Adjust this weight carefully (negative for penalty)
+        params={
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
+            "asset_cfg": SceneEntityCfg("robot"),
+            "flat_var_threshold": 0.01,
+        },
+    )
 
 @configclass
 class G1RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
