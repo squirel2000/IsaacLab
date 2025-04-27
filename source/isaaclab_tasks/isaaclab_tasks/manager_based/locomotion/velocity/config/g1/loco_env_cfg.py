@@ -53,12 +53,12 @@ class G1Rewards(RewardsCfg):
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"])},
     )
-    # Penalize deviation from default of the joints that are not essential for locomotion
-    joint_deviation_hip = RewTerm(
-        func=mdp.joint_deviation_l1,
-        weight=-0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
-    )
+    # TODO: Penalize deviation from default of the joints that are not essential for locomotion
+    # joint_deviation_hip = RewTerm(
+    #     func=mdp.joint_deviation_l1,
+    #     weight=-0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
+    # )
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
         weight=-0.1,
@@ -143,9 +143,9 @@ class G1LocoEnvCfg(LocomotionVelocityLocoEnvCfg):
         )
 
         # Commands
-        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 1.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.0, 0.0)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 1.0) # Forward velocity only
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.0, 0.0) # No lateral velocity commanded
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0) # Yaw velocity
 
         # terminations
         self.terminations.base_contact.params["sensor_cfg"].body_names = "torso_link"
@@ -169,7 +169,8 @@ class G1LocoEnvCfg_PLAY(G1LocoEnvCfg):
             self.scene.terrain.terrain_generator.num_cols = 5
             self.scene.terrain.terrain_generator.curriculum = False
 
-        self.commands.base_velocity.ranges.lin_vel_x = (1.0, 1.0)
+        # Set commands for play (e.g., constant forward velocity)
+        self.commands.base_velocity.ranges.lin_vel_x = (1.0, 1.0) # Walk forward at 1 m/s
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.base_velocity.ranges.heading = (0.0, 0.0)
