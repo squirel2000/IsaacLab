@@ -98,14 +98,14 @@ class G1Rewards(RewardsCfg):
         weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names="torso_joint")},
     )
-    contextual_leg_posture = RewTerm(
-        func=mdp.contextual_leg_posture_penalty, # Use the new function
-        weight=-1.0, # Overall weight for this reward term
+    # Penalize bent knees, reward straight legs on flat
+    straight_leg_bonus_on_flat = RewTerm(
+        func=mdp.straight_leg_bonus_on_flat,
+        weight=-0.1,  # Adjust this weight carefully (negative for penalty)
         params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch_joint", ".*_knee_joint"]),
-            "height_scanner_cfg": SceneEntityCfg("height_scanner"), # SensorCfg for height scanner
-            "flat_terrain_std_threshold": 0.02, # Std deviation threshold for "flat" terrain (needs tuning!)
-            "joint_deviation_weight": 1.0, # Weight for the joint deviation calculation within the function
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
+            "asset_cfg": SceneEntityCfg("robot"),
+            "flat_var_threshold": 0.01,
         },
     )
 

@@ -30,7 +30,7 @@ TensorBoard reads the event files in your logs directory; start it with:
 
 Open http://localhost:6006 in your browser
 
-## 4. Run the Isaac-PickPlace-GR1T2-Abs-v0 Task
+## 4. Run the Isaac-PickPlace-GR1T2-Abs-v0 Task with Imitation Learning
 
 ```bash
 ./isaaclab.sh -p scripts/imitation_learning/robomimic/train.py \
@@ -43,3 +43,10 @@ dependencies:
 pip install pin
 pip install pin-pink
 ```
+
+## 5. Todo list
+
+1. Set max_init_terrain_level=0,  # default: 5
+2. Change offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        attach_yaw_only=True,
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
