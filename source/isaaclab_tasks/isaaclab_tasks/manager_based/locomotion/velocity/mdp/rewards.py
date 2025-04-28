@@ -21,6 +21,8 @@ from isaaclab.utils.math import quat_rotate_inverse, yaw_quat
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+from isaaclab.envs.mdp import observations as mdp_core_observations # Using a different alias to avoid confusion
+from isaaclab.assets import Articulation, RigidObject
 
 def feet_air_time(
     env: ManagerBasedRLEnv, command_name: str, sensor_cfg: SceneEntityCfg, threshold: float
@@ -104,3 +106,67 @@ def track_ang_vel_z_world_exp(
     asset = env.scene[asset_cfg.name]
     ang_vel_error = torch.square(env.command_manager.get_command(command_name)[:, 2] - asset.data.root_ang_vel_w[:, 2])
     return torch.exp(-ang_vel_error / std**2)
+
+
+def contextual_leg_posture_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    height_scanner_cfg: SceneEntityCfg,
+    flat_terrain_std_threshold: float,
+    joint_deviation_weight: float = 1.0,
+) -> torch.Tensor:
+    """Penalizes deviation from default leg posture more on flat terrain.
+
+    This reward encourages a straighter leg posture when the terrain
+    is relatively flat (low standard deviation in height scan). The penalty is reduced
+    or removed on rough terrain.
+    """
+
+    # height_scanner = env.scene.sensors[height_scanner_cfg.name]
+
+    # # Height scan data (measure of terrain roughness)    
+    height_data = mdp_core_observations.height_scan(env, sensor_cfg=height_scanner_cfg)
+    
+    # Ensure joint_ids are valid
+    # if selected_joint_ids:
+    #         # Return zero penalty if no valid joints found for this environment
+    #         return torch.zeros(env.num_envs, device=env.device)
+    
+    
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    
+    # We need the default pose of these specific joints.
+    # robot.data.default_joint_pos has shape (num_envs, num_joints) or (num_joints,)
+    # Access the default positions corresponding to the selected joint_ids
+    # If default_joint_pos is (num_envs, num_joints), slice it.
+    # If default_joint_pos is (num_joints,), expand it for broadcasting.
+    if asset.data.default_joint_pos.ndim == 2: # Shape (num_envs, total_joints)
+        default_joint_pos_sliced = asset.data.default_joint_pos[:, asset_cfg.joint_ids] # Shape (num_envs, num_selected_joints)
+    else: # ndim == 1 (total_joints,) - expand to (num_envs, num_selected_joints)
+        default_joint_pos_sliced = asset.data.default_joint_pos[:, asset_cfg.joint_ids].unsqueeze(0).expand(env.num_envs, -1)
+
+    # --- Calculate terrain flatness measure ---
+    # Calculate the standard deviation of the height readings for each environment
+    # We add a small epsilon for numerical stability in case of perfectly uniform scans
+    height_scan_std = torch.std(height_data, dim=1) + 1e-6
+
+    # --- Calculate posture deviation penalty ---
+    # Calculate deviation from default position (L2 norm squared)
+    # You could potentially refine this to penalize only positive deviation for hip/knee pitch
+    # if the default is considered "straight", but L2 deviation from default is a good start.
+    posture_deviation_l2 = torch.sum(torch.square(joint_pos - default_joint_pos_sliced), dim=1)
+
+    # --- Determine contextual weight ---
+    # We want the weight to be high (e.g., 1.0) when height_scan_std is low (flat)
+    # and low (e.g., 0.0) when height_scan_std is high (rough).
+    # A clamped inverse linear scaling: weight = clamp(1 - std / threshold, 0, 1)
+    # This means weight is 1.0 when std=0, 0.0 when std >= threshold, and ramps in between.
+    contextual_weight = torch.clamp(1.0 - height_scan_std / flat_terrain_std_threshold, 0.0, 1.0)
+
+    # --- Calculate the final reward ---
+    # Penalty = - deviation * contextual_weight * overall_weight
+    # Negative sign because it's a penalty.
+    reward = -posture_deviation_l2 * contextual_weight * joint_deviation_weight
+
+    return reward

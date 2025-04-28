@@ -53,12 +53,12 @@ class G1Rewards(RewardsCfg):
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"])},
     )
-    # TODO: Penalize deviation from default of the joints that are not essential for locomotion
-    # joint_deviation_hip = RewTerm(
-    #     func=mdp.joint_deviation_l1,
-    #     weight=-0.1,
-    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
-    # )
+    # Penalize deviation from default of the joints that are not essential for locomotion
+    joint_deviation_hip = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.1,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
+    )
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
         weight=-0.1,
@@ -97,6 +97,16 @@ class G1Rewards(RewardsCfg):
         func=mdp.joint_deviation_l1,
         weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names="torso_joint")},
+    )
+    contextual_leg_posture = RewTerm(
+        func=mdp.contextual_leg_posture_penalty, # Use the new function
+        weight=-1.0, # Overall weight for this reward term
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch_joint", ".*_knee_joint"]),
+            "height_scanner_cfg": SceneEntityCfg("height_scanner"), # SensorCfg for height scanner
+            "flat_terrain_std_threshold": 0.02, # Std deviation threshold for "flat" terrain (needs tuning!)
+            "joint_deviation_weight": 1.0, # Weight for the joint deviation calculation within the function
+        },
     )
 
 
