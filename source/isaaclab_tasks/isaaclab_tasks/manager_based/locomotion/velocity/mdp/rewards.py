@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_rotate_inverse, yaw_quat
+from isaaclab.sensors import RayCaster # Make sure RayCaster is imported
+import isaaclab.envs.mdp as mdp
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-from isaaclab.envs.mdp import observations as mdp_core_observations # Using a different alias to avoid confusion
-from isaaclab.assets import Articulation, RigidObject
 
 def feet_air_time(
     env: ManagerBasedRLEnv, command_name: str, sensor_cfg: SceneEntityCfg, threshold: float
@@ -108,27 +108,23 @@ def track_ang_vel_z_world_exp(
     return torch.exp(-ang_vel_error / std**2)
 
 
+# --- Helper ---
+def _compute_terrain_roughness_raw(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Uses the height scanner to detect flat terrain, returns shape (num_envs,)."""
+    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
+    # Assuming variance handles it or non-hits are filtered/ignored by sensor processing.
+    height_diffs = sensor.data.pos_w[:, 2].unsqueeze(-1) - sensor.data.ray_hits_w[..., 2]  # (N, num_rays) = (N, 1) - (N, num_rays)
+    roughness = torch.var(height_diffs, dim=1, unbiased=False) # (N,)
+    return roughness
+
 def straight_leg_bonus_on_flat(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), sensor_cfg: SceneEntityCfg = SceneEntityCfg("height_scanner"), flat_var_threshold: float = 0.01,
 ) -> torch.Tensor:
-    """
-    Penalizes bending the specified joints (knees) when the terrain is flat. Uses the height scanner to detect flat terrain.
-    
-    Args:
-        height_scanner_cfg: Configuration for the height scanner sensor. Defaults to SceneEntityCfg("height_scanner").
-        flat_threshold: Max standard deviation of height scan points for ground to be considered flat.
-
-    Returns:
-        A tensor of shape (num_envs,) containing the penalty for each environment.
-    """
-    # Access the height scanner sensor
-    sensor = env.scene.sensors[sensor_cfg.name]
-    # Compute height scan as in the observation function
-    height_scan = sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2]
-    # Compute variance
-    scan_var = torch.var(height_scan, dim=1)
+    """Penalizes bending the specified joints (knees) when the terrain is flat."""
+    # # Access the height scanner sensor
+    height_scan_var = _compute_terrain_roughness_raw(env, sensor_cfg) # Return (N,)
     # Detect flat terrain
-    is_flat = scan_var < flat_var_threshold
+    is_flat = height_scan_var < flat_var_threshold
     
     # Get joint positions (assume knees are named "knee_joint")
     asset = env.scene[asset_cfg.name]
@@ -142,3 +138,18 @@ def straight_leg_bonus_on_flat(
     penalty = torch.sum(torch.abs(knee_angles), dim=1)
     # Only apply when on flat
     return penalty * is_flat.float()
+
+
+def adaptive_joint_deviation(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg, flat_threshold: float, flat_penalty: float, rough_penalty: float
+) -> torch.Tensor:
+    """Penalize joint deviations more on flat terrain and less on rough. Returns shape (num_envs,)."""
+    deviation = mdp.joint_deviation_l1(env, asset_cfg) # Shape (N,)
+    height_scan_var = _compute_terrain_roughness_raw(env, sensor_cfg) # Shape (N,)
+
+    penalty = torch.where(
+        height_scan_var < flat_threshold, # Condition (N,)
+        flat_penalty * deviation,  # (N,)
+        rough_penalty * deviation  # (N,)
+    ) # Result (N,)
+    return penalty

@@ -59,6 +59,17 @@ class G1Rewards(RewardsCfg):
         weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
     )
+    adaptive_hip_deviation = RewTerm(
+        func=mdp.adaptive_joint_deviation,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"]),
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
+            "flat_threshold": 0.01,  # Tune based on terrain variance
+            "flat_penalty": -0.2,    # Higher penalty for flat
+            "rough_penalty": -0.05   # Lower penalty for rough
+        },
+    )
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
         weight=-0.1,
