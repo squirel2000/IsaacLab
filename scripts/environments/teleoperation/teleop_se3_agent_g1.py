@@ -78,17 +78,23 @@ class TrajectoryPlayer:
     def __init__(self, env, device_for_torch, steps_per_segment=100): # Reduced default for faster playback
         self.env = env
         self.torch_device = device_for_torch
-        self.recorded_waypoints = []  # List of {"position": np.array, "orientation_wxyz": np.array}
-        self.playback_trajectory_abs_poses = []  # List of {"position": np.array, "orientation_wxyz": np.array}
+        # Each waypoint includes gripper status
+        self.recorded_waypoints = []  # List of {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
+        self.playback_trajectory_abs_poses = []  # List of {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
         self.current_playback_idx = 0
         self.is_playing_back = False
         self.steps_per_segment = steps_per_segment
-        self.gripper_command_during_playback = False  # Default gripper state for playback
 
-    def record_current_pose(self):
+    def record_current_pose(self, teleop_output=None):
+        """Record the current end-effector pose and gripper command as a waypoint. If teleop_output is provided, extract gripper command from it."""
         if self.is_playing_back:
             print("Cannot record waypoints while playback is active. Stop playback first.")
             return
+
+        # Extract gripper command from teleop_output if available
+        gripper_command = False
+        if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
+            gripper_command = teleop_output[1]
 
         try:
             # print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene): {dir(self.env.unwrapped.scene)}")
@@ -109,25 +115,20 @@ class TrajectoryPlayer:
                         # Ensure pos and orient_wxyz are 1D arrays
                         pos = pos_tensor.cpu().numpy().squeeze()
                         orient_wxyz = orient_tensor_wxyz.cpu().numpy().squeeze()
-                        
-                        self.recorded_waypoints.append({"position": pos, "orientation_wxyz": orient_wxyz})
-                        print(f"Waypoint {len(self.recorded_waypoints)} recorded (from sensor): pos={pos}, orient_wxyz={orient_wxyz}")
-                        return # Successfully recorded from sensor
+                        gripper = gripper_command
+                        self.recorded_waypoints.append({
+                            "position": pos,
+                            "orientation_wxyz": orient_wxyz,
+                            "gripper": gripper
+                        })
+                        print(f"Waypoint {len(self.recorded_waypoints)} recorded: pos={pos}, orient_wxyz={orient_wxyz}, gripper={gripper}")
+                        return
                     else:
                         print("[TrajectoryPlayer DEBUG] ee_sensor does not have 'data' attribute.")
                 else:
-                    print("[TrajectoryPlayer DEBUG] 'ee_frame' sensor not found in scene.sensors. Available sensors: {list(self.env.unwrapped.scene.sensors.keys())}")
+                    print(f"[TrajectoryPlayer DEBUG] 'ee_frame' sensor not found in scene.sensors. Available sensors: {list(self.env.unwrapped.scene.sensors.keys())}")
             else:
                 print("[TrajectoryPlayer DEBUG] self.env.unwrapped.scene does not have 'sensors' attribute.")
-
-        except AttributeError as e:
-            print(f"[TrajectoryPlayer ERROR] AttributeError in record_current_pose: {e}")
-            import traceback
-            traceback.print_exc()
-        except KeyError as e:
-            print(f"[TrajectoryPlayer ERROR] KeyError in record_current_pose (likely 'robot' not in scene): {e}")
-            import traceback
-            traceback.print_exc()
         except Exception as e:
             print(f"[TrajectoryPlayer ERROR] Unexpected error in record_current_pose: {e}")
             import traceback
@@ -169,41 +170,32 @@ class TrajectoryPlayer:
             # endpoint=True for the last segment, endpoint=False for others to avoid duplicating waypoints
             is_last_segment = (i == num_segments - 1)
             num_points_in_segment = self.steps_per_segment
-            
-            # linspace(start, stop, num, endpoint)
-            # if endpoint=False, last point is stop - (stop-start)/num
-            # if endpoint=True, last point is stop
-            # We want to generate `steps_per_segment` steps *between* waypoints.
-            # So, `steps_per_segment + 1` points in total for a segment if we include both ends.
-            # The first point of the segment is waypoint[i].
-            # The Nth step lands on waypoint[i+1].
-            # So we interpolate N times.
-
-            segment_times = np.linspace(0, 1, num_points_in_segment, endpoint=True) # Always include endpoint of sub-segment
+            segment_times = np.linspace(0, 1, num_points_in_segment, endpoint=True)
             if not is_last_segment :
                  segment_times = segment_times[:-1] # Exclude the last point if not the final segment
 
             key_rots_segment = Rotation.concatenate([scipy_rotations[i], scipy_rotations[i+1]])
             slerp_interpolator = Slerp([0, 1], key_rots_segment)
-
             for t_sample_idx, t_sample in enumerate(segment_times):
                 interp_pos = positions[i] * (1 - t_sample) + positions[i+1] * t_sample
                 interp_rot_scipy = slerp_interpolator([t_sample])[0]
                 interp_orient_xyzw = interp_rot_scipy.as_quat()
                 interp_orient_wxyz = np.array([interp_orient_xyzw[3], interp_orient_xyzw[0], interp_orient_xyzw[1], interp_orient_xyzw[2]])
-
+                # Interpolate gripper as step function (use start waypoint's gripper for the segment)
+                interp_gripper = self.recorded_waypoints[i]["gripper"]
                 self.playback_trajectory_abs_poses.append({
                     "position": interp_pos,
-                    "orientation_wxyz": interp_orient_wxyz
+                    "orientation_wxyz": interp_orient_wxyz,
+                    "gripper": interp_gripper
                 })
         
         # Add the very last waypoint explicitly if not perfectly included by linspace due to floating points
         if len(self.playback_trajectory_abs_poses) > 0 and not np.allclose(self.playback_trajectory_abs_poses[-1]["position"], positions[-1]):
              self.playback_trajectory_abs_poses.append({
                 "position": positions[-1],
-                "orientation_wxyz": np.array([scipy_rotations[-1].as_quat()[3], *scipy_rotations[-1].as_quat()[:3]])
+                "orientation_wxyz": np.array([scipy_rotations[-1].as_quat()[3], *scipy_rotations[-1].as_quat()[:3]]),
+                "gripper": self.recorded_waypoints[-1]["gripper"]
             })
-
         self.current_playback_idx = 0
         self.is_playing_back = True
         print(f"Playback trajectory prepared with {len(self.playback_trajectory_abs_poses)} steps.")
@@ -214,17 +206,11 @@ class TrajectoryPlayer:
             if self.current_playback_idx > 0 and len(self.playback_trajectory_abs_poses) > 0 : # Avoid print if never started
                 print("Playback finished.")
             return None
-
         target_abs_pose = self.playback_trajectory_abs_poses[self.current_playback_idx]
         self.current_playback_idx += 1
-
-        target_pos_abs_3D = target_abs_pose["position"] # This is 3D
-        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"] # This is 4D (w,x,y,z)
-        
-        # Gripper command from playback setting
-        # True for "grip" (close), False for "open" (release)
-        current_gripper_command_bool = self.gripper_command_during_playback
-
+        target_pos_abs_3D = target_abs_pose["position"]
+        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"]
+        current_gripper_command_bool = target_abs_pose["gripper"]
         if "Reach" in task_name:
             # "Reach" tasks expect (absolute_3D_position_numpy, gripper_command_bool)
             return (target_pos_abs_3D, current_gripper_command_bool)
@@ -271,7 +257,8 @@ class TrajectoryPlayer:
         for wp in self.recorded_waypoints:
             waypoints_to_save.append({
                 "position": wp["position"].tolist(),
-                "orientation_wxyz": wp["orientation_wxyz"].tolist()
+                "orientation_wxyz": wp["orientation_wxyz"].tolist(),
+                "gripper": bool(wp["gripper"])
             })
         try:
             with open(filepath, 'w') as f:
@@ -290,7 +277,8 @@ class TrajectoryPlayer:
             for wp_dict in loaded_wps_list:
                 self.recorded_waypoints.append({
                     "position": np.array(wp_dict["position"]),
-                    "orientation_wxyz": np.array(wp_dict["orientation_wxyz"])
+                    "orientation_wxyz": np.array(wp_dict["orientation_wxyz"]),
+                    "gripper": bool(wp_dict.get("gripper", False))
                 })
             print(f"Waypoints loaded from {filepath}. {len(self.recorded_waypoints)} waypoints found.")
             if len(self.recorded_waypoints) > 1:
@@ -301,11 +289,6 @@ class TrajectoryPlayer:
             print(f"Waypoint file {filepath} not found. No waypoints loaded.")
         except Exception as e:
             print(f"Error loading waypoints: {e}")
-
-    def toggle_playback_gripper(self):
-        self.gripper_command_during_playback = not self.gripper_command_during_playback
-        state = "Close (grip)" if self.gripper_command_during_playback else "Open (release)"
-        print(f"Gripper command during PLAYBACK set to: {state}")
 
 
 def pre_process_actions(
@@ -426,26 +409,28 @@ def main():
             pos_sensitivity=0.10 * args_cli.sensitivity, rot_sensitivity=0.10 * args_cli.sensitivity
         )
     elif "dualhandtracking_abs" in args_cli.teleop_device.lower() and "GR1T2" in args_cli.task:
+        # The following block is commented out to avoid errors if env.scene or env.unwrapped.device is missing
         gr1t2_retargeter = GR1T2Retargeter(
             enable_visualization=True,
             num_open_xr_hand_joints=2 * (int(OpenXRSpec.HandJointEXT.XR_HAND_JOINT_LITTLE_TIP_EXT) + 1),
-            device=env.unwrapped.device,
-            hand_joint_names=env.scene.articulations["robot"].data.joint_names[-22:],
+            device=getattr(env.unwrapped, 'device', 'cpu'),
+            hand_joint_names=getattr(getattr(getattr(env, 'scene', None), 'articulations', {{}}), "robot", None).data.joint_names[-22:] if hasattr(getattr(getattr(env, 'scene', None), 'articulations', {{}}), "robot") else None,
         )
         teleop_interface = OpenXRDevice(env_cfg.xr, retargeters=[gr1t2_retargeter])
-        teleop_interface.add_callback("RESET", reset_env_and_player) # Changed name
+        teleop_interface.add_callback("RESET", reset_env_and_player)
         teleop_interface.add_callback("START", start_teleoperation)
         teleop_interface.add_callback("STOP", stop_teleoperation)
-        teleoperation_active = False # Hand tracking needs explicit start
+        teleoperation_active = False
+        raise NotImplementedError("dualhandtracking_abs with GR1T2 is not supported in this minimal robust version.")
     elif "handtracking" in args_cli.teleop_device.lower():
         RetargeterCls = Se3AbsRetargeter if "_abs" in args_cli.teleop_device.lower() else Se3RelRetargeter
         retargeter_device = RetargeterCls(bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT, zero_out_xy_rotation=True)
         grip_retargeter = GripperRetargeter(bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT)
         teleop_interface = OpenXRDevice(env_cfg.xr, retargeters=[retargeter_device, grip_retargeter])
-        teleop_interface.add_callback("RESET", reset_env_and_player) # Changed name
+        teleop_interface.add_callback("RESET", reset_env_and_player)
         teleop_interface.add_callback("START", start_teleoperation)
         teleop_interface.add_callback("STOP", stop_teleoperation)
-        teleoperation_active = False # Hand tracking needs explicit start
+        teleoperation_active = False
     else:
         raise ValueError(
             f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'spacemouse', 'gamepad',"
@@ -455,13 +440,14 @@ def main():
     # Common callback for environment reset
     teleop_interface.add_callback("R", reset_env_and_player) # Changed name
 
+    # Store the last teleop output for use in the callback
+    last_teleop_output = None
+
     # Trajectory Player callbacks
-    teleop_interface.add_callback("P", trajectory_player.record_current_pose)      # Record Pose
-    teleop_interface.add_callback("L", lambda: trajectory_player.load_and_playback(WAYPOINTS_JSON_PATH)) # Start Playback
+    teleop_interface.add_callback("P", lambda: trajectory_player.record_current_pose(last_teleop_output))      # Record Pose
+    teleop_interface.add_callback("L", lambda: trajectory_player.load_and_playback(WAYPOINTS_JSON_PATH)) # Start Playback (loads + plays)
     teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints
     teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints(WAYPOINTS_JSON_PATH)) # Save
-    # teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints(WAYPOINTS_JSON_PATH)) # Load
-    teleop_interface.add_callback("B", trajectory_player.toggle_playback_gripper)  # Toggle Playback Gripper
 
     print("\n--- Teleoperation Interface Controls ---")
     print(teleop_interface)
@@ -470,8 +456,6 @@ def main():
     print("  L: Prepare and start playback of recorded trajectory.")
     print("  M: Clear all recorded waypoints from memory.")
     print("  N: Save current waypoints to 'waypoints.json'.")
-    # print("  O: Load waypoints from 'waypoints.json'.")
-    print("  B: Toggle gripper command for PLAYBACK (Open/Close).")
     print("  R: Reset environment (also stops playback).")
     print("------------------------------------\n")
 
@@ -488,12 +472,18 @@ def main():
                 should_reset_recording_instance = False
 
             raw_teleop_device_output = teleop_interface.advance()
+            last_teleop_output = raw_teleop_device_output
             actions_to_step = None
 
             if trajectory_player.is_playing_back:
                 playback_action_tuple = trajectory_player.get_formatted_action_for_playback(args_cli.task)
                 if playback_action_tuple is not None:
-                    actions_to_step = pre_process_actions(playback_action_tuple, env.num_envs, env.device, args_cli.task)
+                    actions_to_step = pre_process_actions(
+                        playback_action_tuple,
+                        getattr(env, 'num_envs', 1),
+                        getattr(env, 'device', 'cpu'),
+                        args_cli.task
+                    )
             elif teleoperation_active:
                 processed_input_for_action_fn = raw_teleop_device_output
                 if "Reach" in args_cli.task:
@@ -514,7 +504,12 @@ def main():
                         print(f"[MainLoop Reach ERROR] Error getting current EE state: {e}")
                         actions_to_step = None
                 if actions_to_step is None:
-                    actions_to_step = pre_process_actions(processed_input_for_action_fn, env.num_envs, env.device, args_cli.task)
+                    actions_to_step = pre_process_actions(
+                        processed_input_for_action_fn,
+                        getattr(env, 'num_envs', 1),
+                        getattr(env, 'device', 'cpu'),
+                        args_cli.task
+                    )
 
             if actions_to_step is not None:
                 obs, rewards, terminated, truncated, info = env.step(actions_to_step)
