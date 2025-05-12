@@ -9,9 +9,9 @@
 
 import argparse
 import json # For saving/loading waypoints
+import os
 
 import numpy as np
-import scipy.interpolate # Keep this for Slerp if needed, but Rotation object has Slerp too
 from scipy.spatial.transform import Rotation, Slerp # Slerp specific import
 import torch
 
@@ -72,6 +72,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
 
+WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
 
 class TrajectoryPlayer:
     def __init__(self, env, device_for_torch, steps_per_segment=100): # Reduced default for faster playback
@@ -84,30 +85,22 @@ class TrajectoryPlayer:
         self.steps_per_segment = steps_per_segment
         self.gripper_command_during_playback = False  # Default gripper state for playback
 
-        # Get the name of the robot's end-effector frame if available, otherwise default
-        # This depends on how the specific environment is structured.
-        # For now, we assume the relevant EE data is in env.unwrapped.scene["robot"].data.ee_state_w
-        # which is common for many Isaac Lab manipulation tasks.
-
     def record_current_pose(self):
-        print("[TrajectoryPlayer DEBUG] Inside record_current_pose.")
         if self.is_playing_back:
             print("Cannot record waypoints while playback is active. Stop playback first.")
             return
 
         try:
-            print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene): {dir(self.env.unwrapped.scene)}")
-            
-            # --- BEGIN SENSOR DEBUG ---
+            # print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene): {dir(self.env.unwrapped.scene)}")
             if hasattr(self.env.unwrapped.scene, 'sensors'):
-                print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene.sensors): {dir(self.env.unwrapped.scene.sensors)}")
+                # print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene.sensors): {dir(self.env.unwrapped.scene.sensors)}")
                 if "ee_frame" in self.env.unwrapped.scene.sensors:
                     ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                    print(f"[TrajectoryPlayer DEBUG] type(ee_sensor): {type(ee_sensor)}")
-                    print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor): {dir(ee_sensor)}")
+                    # print(f"[TrajectoryPlayer DEBUG] type(ee_sensor): {type(ee_sensor)}")
+                    # print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor): {dir(ee_sensor)}")
                     if hasattr(ee_sensor, 'data'):
-                        print(f"[TrajectoryPlayer DEBUG] type(ee_sensor.data): {type(ee_sensor.data)}")
-                        print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor.data): {dir(ee_sensor.data)}")
+                        # print(f"[TrajectoryPlayer DEBUG] type(ee_sensor.data): {type(ee_sensor.data)}")
+                        # print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor.data): {dir(ee_sensor.data)}")
                         
                         # Attempt to get pose from sensor data
                         pos_tensor = ee_sensor.data.target_pos_w[0]  # Use target_pos_w
@@ -126,38 +119,6 @@ class TrajectoryPlayer:
                     print("[TrajectoryPlayer DEBUG] 'ee_frame' sensor not found in scene.sensors. Available sensors: {list(self.env.unwrapped.scene.sensors.keys())}")
             else:
                 print("[TrajectoryPlayer DEBUG] self.env.unwrapped.scene does not have 'sensors' attribute.")
-            # --- END SENSOR DEBUG ---
-
-            # Fallback to articulation data if sensor method fails or is not available
-            print("[TrajectoryPlayer DEBUG] Falling back to articulation data for EE pose.")
-            if "robot" in self.env.unwrapped.scene.articulations:
-                robot_object = self.env.unwrapped.scene.articulations["robot"]
-                print(f"[TrajectoryPlayer DEBUG] type(robot_object): {type(robot_object)}")
-                print(f"[TrajectoryPlayer DEBUG] dir(robot_object): {dir(robot_object)}")
-                if hasattr(robot_object, 'data'):
-                    robot_data = robot_object.data
-                    print(f"[TrajectoryPlayer DEBUG] type(robot_data): {type(robot_data)}")
-                    print(f"[TrajectoryPlayer DEBUG] dir(robot_data): {dir(robot_data)}")
-                    # The original error was here: 'ArticulationData' object has no attribute 'ee_state_w'
-                    # We need to find the correct attribute in robot_data for the EE pose.
-                    # For now, this will still error out if ee_state_w is not the correct path.
-                    # We will analyze dir(robot_data) from the output to find the correct attribute.
-                    current_ee_state_w_tensor = robot_data.ee_state_w[0] # This line will likely still fail
-                    current_ee_state_w = current_ee_state_w_tensor.cpu().numpy()
-                    pos = current_ee_state_w[0:3]
-                else:
-                    print("[TrajectoryPlayer DEBUG] robot_object does not have attribute 'data'")
-                    return # Cannot proceed without robot data
-            else:
-                print("[TrajectoryPlayer DEBUG] 'robot' not in self.env.unwrapped.scene.articulations. Available: {list(self.env.unwrapped.scene.articulations.keys())}")
-                return # Cannot proceed if robot articulation is not found
-            
-            # This part will only be reached if the articulation fallback is attempted AND ee_state_w exists (which it doesn't)
-            # or if we find the correct attribute later.
-            orient_wxyz = current_ee_state_w[3:7]  # Stored as w,x,y,z from Isaac Sim
-
-            self.recorded_waypoints.append({"position": pos, "orientation_wxyz": orient_wxyz})
-            print(f"Waypoint {len(self.recorded_waypoints)} recorded: pos={pos}, orient_wxyz={orient_wxyz}")
 
         except AttributeError as e:
             print(f"[TrajectoryPlayer ERROR] AttributeError in record_current_pose: {e}")
@@ -202,7 +163,6 @@ class TrajectoryPlayer:
         for i in range(num_segments):
             # Create N points for the segment, where N = self.steps_per_segment
             # endpoint=True for the last segment, endpoint=False for others to avoid duplicating waypoints
-            # (as the start of the next segment will be that waypoint)
             is_last_segment = (i == num_segments - 1)
             num_points_in_segment = self.steps_per_segment
             
@@ -218,7 +178,6 @@ class TrajectoryPlayer:
             segment_times = np.linspace(0, 1, num_points_in_segment, endpoint=True) # Always include endpoint of sub-segment
             if not is_last_segment :
                  segment_times = segment_times[:-1] # Exclude the last point if not the final segment
-
 
             key_rots_segment = Rotation.concatenate([scipy_rotations[i], scipy_rotations[i+1]])
             slerp_interpolator = Slerp([0, 1], key_rots_segment)
@@ -240,7 +199,6 @@ class TrajectoryPlayer:
                 "position": positions[-1],
                 "orientation_wxyz": np.array([scipy_rotations[-1].as_quat()[3], *scipy_rotations[-1].as_quat()[:3]])
             })
-
 
         self.current_playback_idx = 0
         self.is_playing_back = True
@@ -272,28 +230,11 @@ class TrajectoryPlayer:
             
             # Accessing robot data for playback - ensure this is also robust or uses the corrected path once found
             try:
-                # Try sensor first for playback as well
-                if hasattr(self.env.unwrapped.scene, 'sensors') and "ee_frame" in self.env.unwrapped.scene.sensors:
-                    ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                    if hasattr(ee_sensor, 'data') and hasattr(ee_sensor.data, 'target_pos_w') and hasattr(ee_sensor.data, 'target_quat_w'): # Check for target_ attributes
-                        current_pos_abs = ee_sensor.data.target_pos_w[0].cpu().numpy().squeeze() # Use target_pos_w and squeeze
-                        current_rot_abs_wxyz = ee_sensor.data.target_quat_w[0].cpu().numpy().squeeze() # Use target_quat_w and squeeze
-                        print("[TrajectoryPlayer Playback DEBUG] Using sensor data for current EE pose.")
-                    else: # Fallback if sensor data attributes are missing
-                        print("[TrajectoryPlayer Playback DEBUG] Sensor 'ee_frame' found but data attributes missing, falling back to articulation for playback.")
-                        robot_data_playback = self.env.unwrapped.scene.articulations["robot"].data
-                        # This will fail if ee_state_w is not the correct attribute
-                        current_ee_state_w_playback = robot_data_playback.ee_state_w[0].cpu().numpy()
-                        current_pos_abs = current_ee_state_w_playback[0:3]
-                        current_rot_abs_wxyz = current_ee_state_w_playback[3:7]
-                else: # Fallback if sensor itself is missing
-                    print("[TrajectoryPlayer Playback DEBUG] Sensor 'ee_frame' not found, falling back to articulation for playback.")
-                    robot_data_playback = self.env.unwrapped.scene.articulations["robot"].data
-                    # This will fail if ee_state_w is not the correct attribute
-                    current_ee_state_w_playback = robot_data_playback.ee_state_w[0].cpu().numpy()
-                    current_pos_abs = current_ee_state_w_playback[0:3]
-                    current_rot_abs_wxyz = current_ee_state_w_playback[3:7] # Corrected this line
-
+                ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
+                current_pos_abs = ee_sensor.data.target_pos_w[0].cpu().numpy().squeeze() # Use target_pos_w and squeeze
+                current_rot_abs_wxyz = ee_sensor.data.target_quat_w[0].cpu().numpy().squeeze() # Use target_quat_w and squeeze
+                print(f"Current_pos_abs({current_pos_abs}) and current_rot_abs_wxyz({current_rot_abs_wxyz})")                
+                
                 delta_pos = target_pos_abs_3D - current_pos_abs
                 
                 R_current = Rotation.from_quat([current_rot_abs_wxyz[1], current_rot_abs_wxyz[2], current_rot_abs_wxyz[3], current_rot_abs_wxyz[0]]) # xyzw
@@ -306,8 +247,7 @@ class TrajectoryPlayer:
                 return (delta_pose_command_6D, current_gripper_command_bool)
             except AttributeError as e:
                 print(f"[TrajectoryPlayer Playback ERROR] AttributeError getting current EE state: {e}")
-                # Potentially stop playback or return a neutral action if state can't be read
-                self.is_playing_back = False 
+                self.is_playing_back = False # Potentially stop playback or return a neutral action if state can't be read
                 return None # Stop playback if we can't get current state
             except KeyError as e:
                 print(f"[TrajectoryPlayer Playback ERROR] KeyError getting current EE state (likely 'robot' not in scene): {e}")
@@ -318,10 +258,11 @@ class TrajectoryPlayer:
                 self.is_playing_back = False
                 return None
 
-    def save_waypoints(self, filepath="waypoints.json"):
+    def save_waypoints(self, filepath=WAYPOINTS_JSON_PATH):
         if not self.recorded_waypoints:
             print("No waypoints to save.")
             return
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         waypoints_to_save = []
         for wp in self.recorded_waypoints:
             waypoints_to_save.append({
@@ -333,11 +274,11 @@ class TrajectoryPlayer:
                 json.dump(waypoints_to_save, f, indent=4)
             print(f"Waypoints saved to {filepath}")
         except Exception as e:
-            print(f"[TrajectoryPlayer ERROR] Error saving waypoints to {filepath}: {e}") # Changed to print
+            print(f"[TrajectoryPlayer ERROR] Error saving waypoints to {filepath}: {e}")
             import traceback
             traceback.print_exc()
 
-    def load_waypoints(self, filepath="waypoints.json"):
+    def load_waypoints(self, filepath=WAYPOINTS_JSON_PATH):
         try:
             with open(filepath, 'r') as f:
                 loaded_wps_list = json.load(f)
@@ -349,8 +290,6 @@ class TrajectoryPlayer:
                 })
             print(f"Waypoints loaded from {filepath}. {len(self.recorded_waypoints)} waypoints found.")
             if len(self.recorded_waypoints) > 1:
-                # Optionally, directly prepare for playback after loading
-                # self.prepare_playback_trajectory()
                 print("Press 'L' to start playback with loaded waypoints.")
             elif len(self.recorded_waypoints) > 0:
                 print("Loaded waypoints, but need at least 2 to form a trajectory.")
@@ -436,22 +375,23 @@ def main():
             "Orientation commands from SE3 devices will be used to calculate deltas but only position is sent."
         )
 
-    omni.log.warn(f"args_cli.task: {args_cli.task}")
-    print(f"args_cli: {args_cli}")
-    print(f"args_cli.task: {args_cli.task}")
-    print(f"args_cli.teleop_device: {args_cli.teleop_device}")
-
+    # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
     teleoperation_active = True # Default to active for keyboard/spacemouse/gamepad
 
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
+    # --- BEGIN: Optional flag to allow/disable environment reset ---
+    allow_env_reset = True  # Set to False to disable all environment resets
+    # --- END: Optional flag ---
 
     def reset_env_and_player(): # Renamed for clarity
         nonlocal should_reset_recording_instance
-        should_reset_recording_instance = True
-        if trajectory_player.is_playing_back:
-            trajectory_player.is_playing_back = False
-            omni.log.info("Playback stopped due to environment reset request.")
+        if allow_env_reset:
+            should_reset_recording_instance = True
+            if trajectory_player.is_playing_back:
+                trajectory_player.is_playing_back = False
+                omni.log.info("Playback stopped due to environment reset request.")
+        else:
+            print("[INFO] Environment reset is currently disabled (allow_env_reset=False)")
 
     def start_teleoperation():
         nonlocal teleoperation_active
@@ -466,12 +406,20 @@ def main():
     pos_sens = 0.4 * args_cli.sensitivity
     rot_sens = 0.4 * args_cli.sensitivity
 
+    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
+
     if args_cli.teleop_device.lower() == "keyboard":
-        teleop_interface = Se3Keyboard(pos_sensitivity=pos_sens, rot_sensitivity=rot_sens)
+        teleop_interface = Se3Keyboard(
+            pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
+        )
     elif args_cli.teleop_device.lower() == "spacemouse":
-        teleop_interface = Se3SpaceMouse(pos_sensitivity=pos_sens, rot_sensitivity=rot_sens)
+        teleop_interface = Se3SpaceMouse(
+            pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
+        )
     elif args_cli.teleop_device.lower() == "gamepad":
-        teleop_interface = Se3Gamepad(pos_sensitivity=pos_sens * 2, rot_sensitivity=rot_sens * 2)
+        teleop_interface = Se3SpaceMouse(
+            pos_sensitivity=0.10 * args_cli.sensitivity, rot_sensitivity=0.10 * args_cli.sensitivity
+        )
     elif "dualhandtracking_abs" in args_cli.teleop_device.lower() and "GR1T2" in args_cli.task:
         gr1t2_retargeter = GR1T2Retargeter(
             enable_visualization=True,
@@ -494,24 +442,25 @@ def main():
         teleop_interface.add_callback("STOP", stop_teleoperation)
         teleoperation_active = False # Hand tracking needs explicit start
     else:
-        raise ValueError(f"Invalid device: {args_cli.teleop_device}")
+        raise ValueError(
+            f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'spacemouse', 'gamepad',"
+            " 'handtracking', 'handtracking_abs'."
+        )
 
     # Common callback for environment reset
     teleop_interface.add_callback("R", reset_env_and_player) # Changed name
 
-    # Trajectory Player callbacks - **USING NON-CONFLICTING KEYS**
+    # Trajectory Player callbacks
     teleop_interface.add_callback("P", trajectory_player.record_current_pose)      # Record Pose
     teleop_interface.add_callback("L", trajectory_player.prepare_playback_trajectory) # Start Playback
-    teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints (was C)
-    teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints("waypoints.json")) # Save (was K)
-    teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints("waypoints.json")) # Load
-    teleop_interface.add_callback("B", trajectory_player.toggle_playback_gripper)  # Toggle Playback Gripper (was G)
+    teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints
+    teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints(WAYPOINTS_JSON_PATH)) # Save
+    teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints(WAYPOINTS_JSON_PATH)) # Load
+    teleop_interface.add_callback("B", trajectory_player.toggle_playback_gripper)  # Toggle Playback Gripper
 
     print("\n--- Teleoperation Interface Controls ---")
-    # This print(teleop_interface) is fine, it shows the Se3Keyboard's own mapping
-    # The duplicate print was removed from earlier in the code.
     print(teleop_interface)
-    print("\n--- Trajectory Player Controls (Non-conflicting) ---")
+    print("\n--- Trajectory Player Controls for Unitree G1 ---")
     print("  P: Record current EE pose as waypoint.")
     print("  L: Prepare and start playback of recorded trajectory.")
     print("  M: Clear all recorded waypoints from memory. (was C)")
@@ -522,9 +471,8 @@ def main():
     print("------------------------------------\n")
 
     # Initialize environment and teleop interface
-    obs, info = env.reset() # Get initial observation
-    if hasattr(teleop_interface, "reset"):
-        teleop_interface.reset()
+    obs, info = env.reset()
+    teleop_interface.reset()
 
     # Simulation loop
     while simulation_app.is_running():
@@ -533,86 +481,40 @@ def main():
                 obs, info = env.reset()
                 if hasattr(teleop_interface, "reset"): teleop_interface.reset()
                 should_reset_recording_instance = False
-                # trajectory_player.is_playing_back is handled by reset_env_and_player callback
 
-            # teleop_interface.advance() polls keys and triggers callbacks like P, L, M, N, O, B, R
-            # AND returns raw delta commands from keyboard if no other callback consumed the event
             raw_teleop_device_output = teleop_interface.advance()
-
             actions_to_step = None
 
             if trajectory_player.is_playing_back:
-                # Get (pose_data_np, gripper_bool) from player
                 playback_action_tuple = trajectory_player.get_formatted_action_for_playback(args_cli.task)
                 if playback_action_tuple is not None:
                     actions_to_step = pre_process_actions(playback_action_tuple, env.num_envs, env.device, args_cli.task)
             elif teleoperation_active:
-                # Manual teleoperation is active
-                # raw_teleop_device_output is (delta_pose_6D_np, gripper_bool_from_device_toggle)
-                
-                processed_input_for_action_fn = raw_teleop_device_output # Default for IK-Rel
-
+                processed_input_for_action_fn = raw_teleop_device_output
                 if "Reach" in args_cli.task:
-                    # For "Reach", convert device's delta_pos to an absolute_pos target
-                    # raw_teleop_device_output[0] is 6D delta [dx,dy,dz,dax,day,daz]
-                    # raw_teleop_device_output[1] is gripper command from device (e.g. keyboard 'K')
-                    
-                    # Get current EE state (position part) for the first environment
-                    # This must be done *after* any potential env.reset() and *before* env.step()
-
-                    # Accessing robot data for Reach task - ensure this is also robust
                     try:
-                        # Try sensor first for Reach task as well
                         if hasattr(env.unwrapped.scene, 'sensors') and "ee_frame" in env.unwrapped.scene.sensors:
                             ee_sensor_reach = env.unwrapped.scene.sensors["ee_frame"]
-                            if hasattr(ee_sensor_reach, 'data') and hasattr(ee_sensor_reach.data, 'target_pos_w'): # Check for target_pos_w
-                                current_ee_pos_abs_tensor = ee_sensor_reach.data.target_pos_w[0, :3] # on device, use target_pos_w
-                                print("[MainLoop Reach DEBUG] Using sensor data for current EE pose.")
-                            else: # Fallback if sensor data attributes are missing
-                                print("[MainLoop Reach DEBUG] Sensor 'ee_frame' found but data attributes missing, falling back to articulation.")
-                                current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3] # on device
-                        else: # Fallback if sensor itself is missing
-                            print("[MainLoop Reach DEBUG] Sensor 'ee_frame' not found, falling back to articulation.")
-                            current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3] # on device
-                        
-                        current_ee_pos_abs_np = current_ee_pos_abs_tensor.cpu().numpy().squeeze() # Add squeeze here
-                        delta_pos_from_device_np = raw_teleop_device_output[0][:3] # Take only dx,dy,dz
-                        
+                            if hasattr(ee_sensor_reach, 'data') and hasattr(ee_sensor_reach.data, 'target_pos_w'):
+                                current_ee_pos_abs_tensor = ee_sensor_reach.data.target_pos_w[0, :3]
+                            else:
+                                current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3]
+                        else:
+                            current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3]
+                        current_ee_pos_abs_np = current_ee_pos_abs_tensor.cpu().numpy().squeeze()
+                        delta_pos_from_device_np = raw_teleop_device_output[0][:3]
                         target_abs_pos_for_reach_np = current_ee_pos_abs_np + delta_pos_from_device_np
-                        
-                        # pre_process_actions for "Reach" expects (abs_pos_3D_np, gripper_bool)
                         processed_input_for_action_fn = (target_abs_pos_for_reach_np, raw_teleop_device_output[1])
-                    except AttributeError as e:
-                        print(f"[MainLoop Reach ERROR] AttributeError getting current EE state: {e}")
-                        actions_to_step = None # Don't attempt to step if we can't get state
-                    except KeyError as e:
-                        print(f"[MainLoop Reach ERROR] KeyError getting current EE state (likely 'robot' not in scene): {e}")
-                        actions_to_step = None
                     except Exception as e:
-                        print(f"[MainLoop Reach ERROR] Unexpected error getting current EE state: {e}")
+                        print(f"[MainLoop Reach ERROR] Error getting current EE state: {e}")
                         actions_to_step = None
-                
-                if actions_to_step is not None: # Check if processed_input_for_action_fn was successfully created
+                if actions_to_step is None:
                     actions_to_step = pre_process_actions(processed_input_for_action_fn, env.num_envs, env.device, args_cli.task)
 
-            # Apply actions if any, otherwise just render
-                    
-                    target_abs_pos_for_reach_np = current_ee_pos_abs_np + delta_pos_from_device_np
-                    
-                    # pre_process_actions for "Reach" expects (abs_pos_3D_np, gripper_bool)
-                    processed_input_for_action_fn = (target_abs_pos_for_reach_np, raw_teleop_device_output[1])
-
-                actions_to_step = pre_process_actions(processed_input_for_action_fn, env.num_envs, env.device, args_cli.task)
-
-            # Apply actions if any, otherwise just render
             if actions_to_step is not None:
                 obs, rewards, terminated, truncated, info = env.step(actions_to_step)
-                # Optional: print rewards or other info
-                # if env.num_envs == 1 and rewards.item() != 0:
-                #    print(f"Reward: {rewards.item():.4f}")
             else:
-                # If no actions (e.g., playback finished or teleop not active), just render the simulation
-                env.sim.render() # Ensures simulation view updates
+                env.sim.render()
 
     env.close()
 
