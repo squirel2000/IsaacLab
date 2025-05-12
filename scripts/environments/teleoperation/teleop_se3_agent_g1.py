@@ -142,6 +142,10 @@ class TrajectoryPlayer:
         else:
             print("Waypoints cleared.")
 
+    def load_and_playback(self, WAYPOINTS_JSON_PATH):
+        self.load_waypoints(WAYPOINTS_JSON_PATH)
+        self.prepare_playback_trajectory()
+
     def prepare_playback_trajectory(self):
         if len(self.recorded_waypoints) < 2:
             print("Not enough waypoints (need at least 2). Playback not started.")
@@ -357,15 +361,19 @@ def main():
     # parse configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.env_name = args_cli.task
+    if hasattr(env_cfg, "terminations"):
+        env_cfg.terminations = {}
     if "Lift" in args_cli.task:
         # set the resampling time range to large number to avoid resampling
         env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
         # add termination condition for reaching the goal otherwise the environment won't reset
-        env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
+        # env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
     elif "Reach" in args_cli.task:
         if env_cfg.terminations.time_out is None : # Ensure there is a timeout for Reach tasks
              print(f"Reach task '{args_cli.task}' did not have a time_out termination. Adding a default one.")
              env_cfg.terminations.time_out = DoneTerm(func=mdp.time_out, time_out=True) # Assuming mdp.time_out is available
+
+    print("Active terminations in env_cfg:", getattr(env_cfg, "terminations", None))
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     # check environment name (for reach , we don't allow the gripper)
@@ -378,10 +386,7 @@ def main():
     # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
     teleoperation_active = True # Default to active for keyboard/spacemouse/gamepad
-
-    # --- BEGIN: Optional flag to allow/disable environment reset ---
     allow_env_reset = True  # Set to False to disable all environment resets
-    # --- END: Optional flag ---
 
     def reset_env_and_player(): # Renamed for clarity
         nonlocal should_reset_recording_instance
@@ -452,10 +457,10 @@ def main():
 
     # Trajectory Player callbacks
     teleop_interface.add_callback("P", trajectory_player.record_current_pose)      # Record Pose
-    teleop_interface.add_callback("L", trajectory_player.prepare_playback_trajectory) # Start Playback
+    teleop_interface.add_callback("L", lambda: trajectory_player.load_and_playback(WAYPOINTS_JSON_PATH)) # Start Playback
     teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints
     teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints(WAYPOINTS_JSON_PATH)) # Save
-    teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints(WAYPOINTS_JSON_PATH)) # Load
+    # teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints(WAYPOINTS_JSON_PATH)) # Load
     teleop_interface.add_callback("B", trajectory_player.toggle_playback_gripper)  # Toggle Playback Gripper
 
     print("\n--- Teleoperation Interface Controls ---")
@@ -463,10 +468,10 @@ def main():
     print("\n--- Trajectory Player Controls for Unitree G1 ---")
     print("  P: Record current EE pose as waypoint.")
     print("  L: Prepare and start playback of recorded trajectory.")
-    print("  M: Clear all recorded waypoints from memory. (was C)")
-    print("  N: Save current waypoints to 'waypoints.json'. (was K)")
-    print("  O: Load waypoints from 'waypoints.json'.")
-    print("  B: Toggle gripper command for PLAYBACK (Open/Close). (was G)")
+    print("  M: Clear all recorded waypoints from memory.")
+    print("  N: Save current waypoints to 'waypoints.json'.")
+    # print("  O: Load waypoints from 'waypoints.json'.")
+    print("  B: Toggle gripper command for PLAYBACK (Open/Close).")
     print("  R: Reset environment (also stops playback).")
     print("------------------------------------\n")
 
