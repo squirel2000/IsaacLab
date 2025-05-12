@@ -11,8 +11,8 @@ import argparse
 import json # For saving/loading waypoints
 
 import numpy as np
-import scipy.interpolate
-from scipy.spatial.transform import Rotation, Slerp
+import scipy.interpolate # Keep this for Slerp if needed, but Rotation object has Slerp too
+from scipy.spatial.transform import Rotation, Slerp # Slerp specific import
 import torch
 
 from isaaclab.app import AppLauncher
@@ -74,7 +74,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 
 class TrajectoryPlayer:
-    def __init__(self, env, device_for_torch, steps_per_segment=150):
+    def __init__(self, env, device_for_torch, steps_per_segment=100): # Reduced default for faster playback
         self.env = env
         self.torch_device = device_for_torch
         self.recorded_waypoints = []  # List of {"position": np.array, "orientation_wxyz": np.array}
@@ -108,8 +108,11 @@ class TrajectoryPlayer:
     def clear_waypoints(self):
         self.recorded_waypoints = []
         self.playback_trajectory_abs_poses = []
-        self.is_playing_back = False
-        print("Waypoints cleared.")
+        if self.is_playing_back:
+            self.is_playing_back = False
+            print("Playback stopped and waypoints cleared.")
+        else:
+            print("Waypoints cleared.")
 
     def prepare_playback_trajectory(self):
         if len(self.recorded_waypoints) < 2:
@@ -130,27 +133,48 @@ class TrajectoryPlayer:
         num_segments = len(self.recorded_waypoints) - 1
         
         for i in range(num_segments):
-            segment_times = np.linspace(0, 1, self.steps_per_segment, endpoint=(i == num_segments - 1)) # include endpoint only for last segment
+            # Create N points for the segment, where N = self.steps_per_segment
+            # endpoint=True for the last segment, endpoint=False for others to avoid duplicating waypoints
+            # (as the start of the next segment will be that waypoint)
+            is_last_segment = (i == num_segments - 1)
+            num_points_in_segment = self.steps_per_segment
             
-            # Slerp for orientation for the segment [i, i+1]
-            # We need to handle the case of single segment Slerp carefully if using Rotation.concatenate
-            key_rots = Rotation.concatenate([scipy_rotations[i], scipy_rotations[i+1]])
-            key_times = [0, 1]
-            slerp_interpolator = Slerp(key_times, key_rots)
+            # linspace(start, stop, num, endpoint)
+            # if endpoint=False, last point is stop - (stop-start)/num
+            # if endpoint=True, last point is stop
+            # We want to generate `steps_per_segment` steps *between* waypoints.
+            # So, `steps_per_segment + 1` points in total for a segment if we include both ends.
+            # The first point of the segment is waypoint[i].
+            # The Nth step lands on waypoint[i+1].
+            # So we interpolate N times.
 
-            for t_sample in segment_times:
-                # Linear interpolation for position in this segment
+            segment_times = np.linspace(0, 1, num_points_in_segment, endpoint=True) # Always include endpoint of sub-segment
+            if not is_last_segment :
+                 segment_times = segment_times[:-1] # Exclude the last point if not the final segment
+
+
+            key_rots_segment = Rotation.concatenate([scipy_rotations[i], scipy_rotations[i+1]])
+            slerp_interpolator = Slerp([0, 1], key_rots_segment)
+
+            for t_sample_idx, t_sample in enumerate(segment_times):
                 interp_pos = positions[i] * (1 - t_sample) + positions[i+1] * t_sample
-                
                 interp_rot_scipy = slerp_interpolator([t_sample])[0]
-                interp_orient_xyzw = interp_rot_scipy.as_quat() # x,y,z,w
-                interp_orient_wxyz = np.array([interp_orient_xyzw[3], interp_orient_xyzw[0], interp_orient_xyzw[1], interp_orient_xyzw[2]]) # w,x,y,z
+                interp_orient_xyzw = interp_rot_scipy.as_quat()
+                interp_orient_wxyz = np.array([interp_orient_xyzw[3], interp_orient_xyzw[0], interp_orient_xyzw[1], interp_orient_xyzw[2]])
 
                 self.playback_trajectory_abs_poses.append({
                     "position": interp_pos,
                     "orientation_wxyz": interp_orient_wxyz
                 })
         
+        # Add the very last waypoint explicitly if not perfectly included by linspace due to floating points
+        if len(self.playback_trajectory_abs_poses) > 0 and not np.allclose(self.playback_trajectory_abs_poses[-1]["position"], positions[-1]):
+             self.playback_trajectory_abs_poses.append({
+                "position": positions[-1],
+                "orientation_wxyz": np.array([scipy_rotations[-1].as_quat()[3], *scipy_rotations[-1].as_quat()[:3]])
+            })
+
+
         self.current_playback_idx = 0
         self.is_playing_back = True
         print(f"Playback trajectory prepared with {len(self.playback_trajectory_abs_poses)} steps.")
@@ -158,39 +182,46 @@ class TrajectoryPlayer:
     def get_formatted_action_for_playback(self, task_name: str):
         if not self.is_playing_back or self.current_playback_idx >= len(self.playback_trajectory_abs_poses):
             self.is_playing_back = False
-            if self.current_playback_idx > 0: # Avoid printing on first call if no trajectory
+            if self.current_playback_idx > 0 and len(self.playback_trajectory_abs_poses) > 0 : # Avoid print if never started
                 print("Playback finished.")
             return None
 
         target_abs_pose = self.playback_trajectory_abs_poses[self.current_playback_idx]
         self.current_playback_idx += 1
 
-        target_pos_abs = target_abs_pose["position"]
-        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"]
-        current_gripper_command = self.gripper_command_during_playback
+        target_pos_abs_3D = target_abs_pose["position"] # This is 3D
+        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"] # This is 4D (w,x,y,z)
+        
+        # Gripper command from playback setting
+        # True for "grip" (close), False for "open" (release)
+        current_gripper_command_bool = self.gripper_command_during_playback
 
         if "Reach" in task_name:
-            # "Reach" tasks expect absolute position target. Gripper command is often ignored.
-            return (target_pos_abs, current_gripper_command)
-        else:
-            # For "Lift" and other IK-Rel tasks, action is (delta_pos, delta_rot_axis_angle)
+            # "Reach" tasks expect (absolute_3D_position_numpy, gripper_command_bool)
+            return (target_pos_abs_3D, current_gripper_command_bool)
+        else: # e.g. "Lift" (IK-Rel)
+            # IK-Rel tasks expect (delta_pose_6D_numpy, gripper_command_bool)
+            # delta_pose_6D_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
             current_ee_state_w_tensor = self.env.unwrapped.scene["robot"].data.ee_state_w[0]
             current_ee_state_w = current_ee_state_w_tensor.cpu().numpy()
             current_pos_abs = current_ee_state_w[0:3]
             current_rot_abs_wxyz = current_ee_state_w[3:7]
 
-            delta_pos = target_pos_abs - current_pos_abs
+            delta_pos = target_pos_abs_3D - current_pos_abs
             
-            R_current = Rotation.from_quat([current_rot_abs_wxyz[1], current_rot_abs_wxyz[2], current_rot_abs_wxyz[3], current_rot_abs_wxyz[0]])
-            R_target = Rotation.from_quat([target_rot_abs_wxyz[1], target_rot_abs_wxyz[2], target_rot_abs_wxyz[3], target_rot_abs_wxyz[0]])
+            R_current = Rotation.from_quat([current_rot_abs_wxyz[1], current_rot_abs_wxyz[2], current_rot_abs_wxyz[3], current_rot_abs_wxyz[0]]) # xyzw
+            R_target = Rotation.from_quat([target_rot_abs_wxyz[1], target_rot_abs_wxyz[2], target_rot_abs_wxyz[3], target_rot_abs_wxyz[0]]) # xyzw
             
             R_delta = R_target * R_current.inv()
-            delta_rot_axis_angle = R_delta.as_rotvec()
+            delta_rot_axis_angle = R_delta.as_rotvec() # Returns 3D axis-angle
 
-            delta_pose_command = np.concatenate([delta_pos, delta_rot_axis_angle])
-            return (delta_pose_command, current_gripper_command)
+            delta_pose_command_6D = np.concatenate([delta_pos, delta_rot_axis_angle])
+            return (delta_pose_command_6D, current_gripper_command_bool)
 
     def save_waypoints(self, filepath="waypoints.json"):
+        if not self.recorded_waypoints:
+            print("No waypoints to save.")
+            return
         waypoints_to_save = []
         for wp in self.recorded_waypoints:
             waypoints_to_save.append({
@@ -216,39 +247,38 @@ class TrajectoryPlayer:
                 })
             print(f"Waypoints loaded from {filepath}. {len(self.recorded_waypoints)} waypoints found.")
             if len(self.recorded_waypoints) > 1:
-                self.prepare_playback_trajectory()
+                # Optionally, directly prepare for playback after loading
+                # self.prepare_playback_trajectory()
+                print("Press 'L' to start playback with loaded waypoints.")
             elif len(self.recorded_waypoints) > 0:
-                omni.log.warn("Loaded waypoints, but need at least 2 to form a trajectory.")
+                print("Loaded waypoints, but need at least 2 to form a trajectory.")
         except FileNotFoundError:
-            omni.log.error(f"Waypoint file {filepath} not found.")
+            print(f"Waypoint file {filepath} not found. No waypoints loaded.")
         except Exception as e:
-            omni.log.error(f"Error loading waypoints: {e}")
+            print(f"Error loading waypoints: {e}")
 
     def toggle_playback_gripper(self):
         self.gripper_command_during_playback = not self.gripper_command_during_playback
-        print(f"Gripper command during playback set to: {'Close (grip)' if self.gripper_command_during_playback else 'Open (release)'}")
+        state = "Close (grip)" if self.gripper_command_during_playback else "Open (release)"
+        print(f"Gripper command during PLAYBACK set to: {state}")
 
 
 def pre_process_actions(
-    teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]], num_envs: int, device: str, task_name: str
+    # teleop_data format depends on task_name:
+    # For "Reach": (abs_pos_3D_numpy, gripper_command_bool)
+    # For "Lift" (IK-Rel) & others: (delta_pose_6D_numpy, gripper_command_bool)
+    # For "PickPlace-GR1T2": list[tuple[np.ndarray, np.ndarray, np.ndarray]]
+    teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    num_envs: int,
+    device: str,
+    task_name: str
 ) -> torch.Tensor:
-    """Convert teleop data to the format expected by the environment action space.
-
-    Args:
-        teleop_data: Data from the teleoperation device.
-        num_envs: Number of environments.
-        device: Device to create tensors on.
-
-    Returns:
-        Processed actions as a tensor.
-    """
-    # compute actions based on environment
+    """Convert teleop data to the format expected by the environment action space."""
     if "Reach" in task_name:
-        # For Reach, teleop_data is (abs_pose_xyz_numpy, gripper_command_bool)
-        # The gripper_command is usually ignored by Reach envs.
-        # Action is just the target absolute position.
-        target_pos_abs, _ = teleop_data # gripper_command ignored
-        actions = torch.tensor(target_pos_abs, dtype=torch.float, device=device).repeat(num_envs, 1)
+        # Input: (abs_pos_3D_numpy, gripper_command_bool)
+        # Output: Action is just the target absolute 3D position. Gripper command usually ignored.
+        target_pos_abs_3D_np, _ = teleop_data
+        actions = torch.tensor(target_pos_abs_3D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
         return actions
     elif "PickPlace-GR1T2" in task_name:
         (left_wrist_pose, right_wrist_pose, hand_joints) = teleop_data[0]
@@ -261,21 +291,23 @@ def pre_process_actions(
             ]),
             device=device,
             dtype=torch.float32,
-        ).unsqueeze(0)
-        # Concatenate arm poses and hand joint angles
+        ).unsqueeze(0) # Expects batch dim
+        if num_envs > 1 and actions.shape[0] == 1: # repeat if single action for multiple envs
+            actions = actions.repeat(num_envs, 1)
         return actions
-    else:
-        # For other tasks like Lift, teleop_data is (delta_pose_numpy, gripper_command_bool)
-        # delta_pose_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
-        delta_pose, gripper_command = teleop_data
-        delta_pose_tensor = torch.tensor(delta_pose, dtype=torch.float, device=device).repeat(num_envs, 1)
+    else: # IK-Rel tasks like "Lift"
+        # Input: (delta_pose_6D_numpy, gripper_command_bool)
+        # delta_pose_6D_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
+        # gripper_command_bool: True for "grip" (close), False for "open" (release)
+        delta_pose_6D_np, gripper_cmd_bool = teleop_data
         
-        # Gripper command: typically -1 for close (grip), 1 for open (release) in many envs
-        # The boolean from teleop_interface: True for "grip" (close), False for "open" (release)
-        gripper_val = -1.0 if gripper_command else 1.0
-        gripper_vel = torch.full((delta_pose_tensor.shape[0], 1), gripper_val, dtype=torch.float, device=device)
+        delta_pose_tensor = torch.tensor(delta_pose_6D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
         
-        actions = torch.concat([delta_pose_tensor, gripper_vel], dim=1)
+        # Gripper command: typically -1 for close (grip), 1 for open (release) in env actions
+        gripper_val = -1.0 if gripper_cmd_bool else 1.0
+        gripper_action_tensor = torch.full((delta_pose_tensor.shape[0], 1), gripper_val, dtype=torch.float, device=device)
+        
+        actions = torch.concat([delta_pose_tensor, gripper_action_tensor], dim=1)
         return actions
 
 
@@ -284,210 +316,167 @@ def main():
     # parse configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.env_name = args_cli.task
-    # modify configuration
-    env_cfg.terminations.time_out = None
     if "Lift" in args_cli.task:
         # set the resampling time range to large number to avoid resampling
         env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
         # add termination condition for reaching the goal otherwise the environment won't reset
         env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
     elif "Reach" in args_cli.task:
-         # For Reach, time_out is often useful to reset if stuck
-        if env_cfg.terminations.time_out is not None:
-            print("Reach task, keeping existing time_out termination.")
-        else: # If it was None, set a default to avoid running forever if stuck
-            env_cfg.terminations.time_out = DoneTerm(func=mdp.time_out, time_out=True)
-            
-    # create environment
+        if env_cfg.terminations.time_out is None : # Ensure there is a timeout for Reach tasks
+             omni.log.warn(f"Reach task '{args_cli.task}' did not have a time_out termination. Adding a default one.")
+             env_cfg.terminations.time_out = DoneTerm(func=mdp.time_out, time_out=True) # Assuming mdp.time_out is available
+
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     # check environment name (for reach , we don't allow the gripper)
     if "Reach" in args_cli.task:
-        omni.log.warn(
-            f"The environment '{args_cli.task}' does not support gripper control. The device command will be ignored."
+        omni.log.info(
+            f"The environment '{args_cli.task}' uses absolute 3D position control for the end-effector. "
+            "Orientation commands from SE3 devices will be used to calculate deltas but only position is sent."
         )
 
-    # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
-    teleoperation_active = True
+    teleoperation_active = True # Default to active for keyboard/spacemouse/gamepad
 
-    # Instantiate TrajectoryPlayer
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100) # 100 steps per segment
+    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
 
-    # Callback handlers
-    def reset_recording_instance():
-        """Reset the environment to its initial state.
-
-        This callback is triggered when the user presses the reset key (typically 'R').
-        It's useful when:
-        - The robot gets into an undesirable configuration
-        - The user wants to start over with the task
-        - Objects in the scene need to be reset to their initial positions
-
-        The environment will be reset on the next simulation step.
-        """
+    def reset_env_and_player(): # Renamed for clarity
         nonlocal should_reset_recording_instance
         should_reset_recording_instance = True
         if trajectory_player.is_playing_back:
             trajectory_player.is_playing_back = False
-            print("Playback stopped due to environment reset request.")
+            omni.log.info("Playback stopped due to environment reset request.")
 
     def start_teleoperation():
-        """Activate teleoperation control of the robot.
-
-        This callback enables active control of the robot through the input device.
-        It's typically triggered by a specific gesture or button press and is used when:
-        - Beginning a new teleoperation session
-        - Resuming control after temporarily pausing
-        - Switching from observation mode to control mode
-
-        While active, all commands from the device will be applied to the robot.
-        """
         nonlocal teleoperation_active
         teleoperation_active = True
-        print("Teleoperation Activated.")
+        omni.log.info("Teleoperation Activated.")
 
     def stop_teleoperation():
-        """Deactivate teleoperation control of the robot.
-
-        This callback temporarily suspends control of the robot through the input device.
-        It's typically triggered by a specific gesture or button press and is used when:
-        - Taking a break from controlling the robot
-        - Repositioning the input device without moving the robot
-        - Pausing to observe the scene without interference
-
-        While inactive, the simulation continues to render but device commands are ignored.
-        """
         nonlocal teleoperation_active
         teleoperation_active = False
-        print("Teleoperation Deactivated.")
+        omni.log.info("Teleoperation Deactivated.")
 
+    pos_sens = 0.4 * args_cli.sensitivity
+    rot_sens = 0.4 * args_cli.sensitivity
 
-    # create controller
-    # Sensitivity values might need tuning based on task and user preference
-    pos_sens = 0.05 * args_cli.sensitivity # Increased for finer control if needed
-    rot_sens = 0.05 * args_cli.sensitivity
-    
     if args_cli.teleop_device.lower() == "keyboard":
         teleop_interface = Se3Keyboard(pos_sensitivity=pos_sens, rot_sensitivity=rot_sens)
     elif args_cli.teleop_device.lower() == "spacemouse":
         teleop_interface = Se3SpaceMouse(pos_sensitivity=pos_sens, rot_sensitivity=rot_sens)
     elif args_cli.teleop_device.lower() == "gamepad":
-        teleop_interface = Se3Gamepad(pos_sensitivity=pos_sens * 2, rot_sensitivity=rot_sens * 2) # Gamepads often need higher base
+        teleop_interface = Se3Gamepad(pos_sensitivity=pos_sens * 2, rot_sensitivity=rot_sens * 2)
     elif "dualhandtracking_abs" in args_cli.teleop_device.lower() and "GR1T2" in args_cli.task:
-        # Create GR1T2 retargeter with desired configuration
         gr1t2_retargeter = GR1T2Retargeter(
             enable_visualization=True,
             num_open_xr_hand_joints=2 * (int(OpenXRSpec.HandJointEXT.XR_HAND_JOINT_LITTLE_TIP_EXT) + 1),
             device=env.unwrapped.device,
             hand_joint_names=env.scene["robot"].data.joint_names[-22:],
         )
-
-        # Create hand tracking device with retargeter
-        teleop_interface = OpenXRDevice(
-            env_cfg.xr,
-            retargeters=[gr1t2_retargeter],
-        )
-        teleop_interface.add_callback("RESET", reset_recording_instance)
+        teleop_interface = OpenXRDevice(env_cfg.xr, retargeters=[gr1t2_retargeter])
+        teleop_interface.add_callback("RESET", reset_env_and_player) # Changed name
         teleop_interface.add_callback("START", start_teleoperation)
         teleop_interface.add_callback("STOP", stop_teleoperation)
-
-        # Hand tracking needs explicit start gesture to activate
-        teleoperation_active = False
-
+        teleoperation_active = False # Hand tracking needs explicit start
     elif "handtracking" in args_cli.teleop_device.lower():
-        # Create EE retargeter with desired configuration
-        if "_abs" in args_cli.teleop_device.lower():
-            retargeter_device = Se3AbsRetargeter(
-                bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT, zero_out_xy_rotation=True
-            )
-        else:
-            retargeter_device = Se3RelRetargeter(
-                bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT, zero_out_xy_rotation=True
-            )
-
+        RetargeterCls = Se3AbsRetargeter if "_abs" in args_cli.teleop_device.lower() else Se3RelRetargeter
+        retargeter_device = RetargeterCls(bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT, zero_out_xy_rotation=True)
         grip_retargeter = GripperRetargeter(bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT)
-
-        # Create hand tracking device with retargeter (in a list)
-        teleop_interface = OpenXRDevice(
-            env_cfg.xr,
-            retargeters=[retargeter_device, grip_retargeter],
-        )
-        teleop_interface.add_callback("RESET", reset_recording_instance)
+        teleop_interface = OpenXRDevice(env_cfg.xr, retargeters=[retargeter_device, grip_retargeter])
+        teleop_interface.add_callback("RESET", reset_env_and_player) # Changed name
         teleop_interface.add_callback("START", start_teleoperation)
         teleop_interface.add_callback("STOP", stop_teleoperation)
-
-        # Hand tracking needs explicit start gesture to activate
-        teleoperation_active = False
+        teleoperation_active = False # Hand tracking needs explicit start
     else:
-        raise ValueError(
-            f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'spacemouse', 'gamepad',"
-            " 'handtracking', 'handtracking_abs'."
-        )
+        raise ValueError(f"Invalid device: {args_cli.teleop_device}")
 
-    # add teleoperation key for env reset (for all devices)
-    teleop_interface.add_callback("R", reset_recording_instance)
-    print(teleop_interface)
+    # Common callback for environment reset
+    teleop_interface.add_callback("R", reset_env_and_player) # Changed name
 
-
-    # Trajectory Player callbacks
-    teleop_interface.add_callback("P", trajectory_player.record_current_pose)
-    teleop_interface.add_callback("L", trajectory_player.prepare_playback_trajectory)
-    teleop_interface.add_callback("C", trajectory_player.clear_waypoints)
-    teleop_interface.add_callback("K", lambda: trajectory_player.save_waypoints("waypoints.json"))
-    teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints("waypoints.json"))
-    teleop_interface.add_callback("G", trajectory_player.toggle_playback_gripper) # Toggle gripper for playback
+    # Trajectory Player callbacks - **USING NON-CONFLICTING KEYS**
+    teleop_interface.add_callback("P", trajectory_player.record_current_pose)      # Record Pose
+    teleop_interface.add_callback("L", trajectory_player.prepare_playback_trajectory) # Start Playback
+    teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints (was C)
+    teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints("waypoints.json")) # Save (was K)
+    teleop_interface.add_callback("O", lambda: trajectory_player.load_waypoints("waypoints.json")) # Load
+    teleop_interface.add_callback("B", trajectory_player.toggle_playback_gripper)  # Toggle Playback Gripper (was G)
 
     print("\n--- Teleoperation Interface Controls ---")
-    print(teleop_interface) # Prints device specific controls
-    print("\n--- Trajectory Player Controls ---")
+    # This print(teleop_interface) is fine, it shows the Se3Keyboard's own mapping
+    # The duplicate print was removed from earlier in the code.
+    print(teleop_interface)
+    print("\n--- Trajectory Player Controls (Non-conflicting) ---")
     print("  P: Record current EE pose as waypoint.")
     print("  L: Prepare and start playback of recorded trajectory.")
-    print("  C: Clear all recorded waypoints from memory.")
-    print("  K: Save current waypoints to 'waypoints.json'.")
-    print("  O: Load waypoints from 'waypoints.json' and prepare for playback.")
-    print("  G: Toggle gripper command for PLAYBACK (Open/Close).")
+    print("  M: Clear all recorded waypoints from memory. (was C)")
+    print("  N: Save current waypoints to 'waypoints.json'. (was K)")
+    print("  O: Load waypoints from 'waypoints.json'.")
+    print("  B: Toggle gripper command for PLAYBACK (Open/Close). (was G)")
     print("  R: Reset environment (also stops playback).")
     print("------------------------------------\n")
 
-
-    # reset environment
-    env.reset()
-    # Se3Keyboard/Mouse/Gamepad have reset(), OpenXRDevice might not.
+    # Initialize environment and teleop interface
+    obs, info = env.reset() # Get initial observation
     if hasattr(teleop_interface, "reset"):
         teleop_interface.reset()
 
-    # simulate environment
+    # Simulation loop
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
             if should_reset_recording_instance:
-                env.reset()
+                obs, info = env.reset()
                 if hasattr(teleop_interface, "reset"): teleop_interface.reset()
                 should_reset_recording_instance = False
-                # trajectory_player.is_playing_back is already handled by reset_recording_instance callback
+                # trajectory_player.is_playing_back is handled by reset_env_and_player callback
 
-            # Advance teleop interface to process key presses for callbacks AND get raw teleop commands
-            raw_teleop_data = teleop_interface.advance()
+            # teleop_interface.advance() polls keys and triggers callbacks like P, L, M, N, O, B, R
+            # AND returns raw delta commands from keyboard if no other callback consumed the event
+            raw_teleop_device_output = teleop_interface.advance()
+
+            actions_to_step = None
 
             if trajectory_player.is_playing_back:
+                # Get (pose_data_np, gripper_bool) from player
                 playback_action_tuple = trajectory_player.get_formatted_action_for_playback(args_cli.task)
                 if playback_action_tuple is not None:
-                    actions = pre_process_actions(playback_action_tuple, env.num_envs, env.device, args_cli.task)
-                    env.step(actions)
-                else: # Playback finished or issue
-                    env.sim.render() # Just render, user can resume teleop or restart playback
-            elif teleoperation_active: # Not playing back, and teleop is active
-                actions = pre_process_actions(raw_teleop_data, env.num_envs, env.device, args_cli.task)
-                env.step(actions)
-            else: # Not playing back, and teleop is not active (e.g. handtracking waiting for start)
-                env.sim.render()
+                    actions_to_step = pre_process_actions(playback_action_tuple, env.num_envs, env.device, args_cli.task)
+            elif teleoperation_active:
+                # Manual teleoperation is active
+                # raw_teleop_device_output is (delta_pose_6D_np, gripper_bool_from_device_toggle)
                 
-    # close the simulator
+                processed_input_for_action_fn = raw_teleop_device_output # Default for IK-Rel
+
+                if "Reach" in args_cli.task:
+                    # For "Reach", convert device's delta_pos to an absolute_pos target
+                    # raw_teleop_device_output[0] is 6D delta [dx,dy,dz,dax,day,daz]
+                    # raw_teleop_device_output[1] is gripper command from device (e.g. keyboard 'K')
+                    
+                    # Get current EE state (position part) for the first environment
+                    # This must be done *after* any potential env.reset() and *before* env.step()
+                    current_ee_pos_abs_tensor = env.unwrapped.scene["robot"].data.ee_state_w[0, :3] # on device
+                    current_ee_pos_abs_np = current_ee_pos_abs_tensor.cpu().numpy()
+                    
+                    delta_pos_from_device_np = raw_teleop_device_output[0][:3] # Take only dx,dy,dz
+                    
+                    target_abs_pos_for_reach_np = current_ee_pos_abs_np + delta_pos_from_device_np
+                    
+                    # pre_process_actions for "Reach" expects (abs_pos_3D_np, gripper_bool)
+                    processed_input_for_action_fn = (target_abs_pos_for_reach_np, raw_teleop_device_output[1])
+
+                actions_to_step = pre_process_actions(processed_input_for_action_fn, env.num_envs, env.device, args_cli.task)
+
+            # Apply actions if any, otherwise just render
+            if actions_to_step is not None:
+                obs, rewards, terminated, truncated, info = env.step(actions_to_step)
+                # Optional: print rewards or other info
+                # if env.num_envs == 1 and rewards.item() != 0:
+                #    print(f"Reward: {rewards.item():.4f}")
+            else:
+                # If no actions (e.g., playback finished or teleop not active), just render the simulation
+                env.sim.render() # Ensures simulation view updates
+
     env.close()
 
 
 if __name__ == "__main__":
-    # run the main function
     main()
-    # close sim app
     simulation_app.close()
