@@ -8,14 +8,10 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import json # For saving/loading waypoints
-import os
-
-import numpy as np
-from scipy.spatial.transform import Rotation, Slerp # Slerp specific import
-import torch
 
 from isaaclab.app import AppLauncher
+
+from trajectory_player import TrajectoryPlayer # Import the new class
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Keyboard teleoperation for Isaac Lab environments.")
@@ -72,223 +68,6 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
 
-WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
-
-class TrajectoryPlayer:
-    def __init__(self, env, device_for_torch, steps_per_segment=100): # Reduced default for faster playback
-        self.env = env
-        self.torch_device = device_for_torch
-        # Each waypoint includes gripper status
-        self.recorded_waypoints = []  # List of {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
-        self.playback_trajectory_abs_poses = []  # List of {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
-        self.current_playback_idx = 0
-        self.is_playing_back = False
-        self.steps_per_segment = steps_per_segment
-
-    def record_current_pose(self, teleop_output=None):
-        """Record the current end-effector pose and gripper command as a waypoint. If teleop_output is provided, extract gripper command from it."""
-        if self.is_playing_back:
-            print("Cannot record waypoints while playback is active. Stop playback first.")
-            return
-
-        # Extract gripper command from teleop_output if available
-        gripper_command = False
-        if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
-            gripper_command = teleop_output[1]
-
-        try:
-            # print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene): {dir(self.env.unwrapped.scene)}")
-            if hasattr(self.env.unwrapped.scene, 'sensors'):
-                # print(f"[TrajectoryPlayer DEBUG] dir(self.env.unwrapped.scene.sensors): {dir(self.env.unwrapped.scene.sensors)}")
-                if "ee_frame" in self.env.unwrapped.scene.sensors:
-                    ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                    # print(f"[TrajectoryPlayer DEBUG] type(ee_sensor): {type(ee_sensor)}")
-                    # print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor): {dir(ee_sensor)}")
-                    if hasattr(ee_sensor, 'data'):
-                        # print(f"[TrajectoryPlayer DEBUG] type(ee_sensor.data): {type(ee_sensor.data)}")
-                        # print(f"[TrajectoryPlayer DEBUG] dir(ee_sensor.data): {dir(ee_sensor.data)}")
-                        
-                        # Attempt to get pose from sensor data
-                        pos_tensor = ee_sensor.data.target_pos_w[0]  # Use target_pos_w
-                        orient_tensor_wxyz = ee_sensor.data.target_quat_w[0] # Use target_quat_w
-                        
-                        # Ensure pos and orient_wxyz are 1D arrays
-                        pos = pos_tensor.cpu().numpy().squeeze()
-                        orient_wxyz = orient_tensor_wxyz.cpu().numpy().squeeze()
-                        gripper = gripper_command
-                        self.recorded_waypoints.append({
-                            "position": pos,
-                            "orientation_wxyz": orient_wxyz,
-                            "gripper": gripper
-                        })
-                        print(f"Waypoint {len(self.recorded_waypoints)} recorded: pos={pos}, orient_wxyz={orient_wxyz}, gripper={gripper}")
-                        return
-                    else:
-                        print("[TrajectoryPlayer DEBUG] ee_sensor does not have 'data' attribute.")
-                else:
-                    print(f"[TrajectoryPlayer DEBUG] 'ee_frame' sensor not found in scene.sensors. Available sensors: {list(self.env.unwrapped.scene.sensors.keys())}")
-            else:
-                print("[TrajectoryPlayer DEBUG] self.env.unwrapped.scene does not have 'sensors' attribute.")
-        except Exception as e:
-            print(f"[TrajectoryPlayer ERROR] Unexpected error in record_current_pose: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def clear_waypoints(self):
-        self.recorded_waypoints = []
-        self.playback_trajectory_abs_poses = []
-        if self.is_playing_back:
-            self.is_playing_back = False
-            print("Playback stopped and waypoints cleared.")
-        else:
-            print("Waypoints cleared.")
-
-    def load_and_playback(self, WAYPOINTS_JSON_PATH):
-        self.load_waypoints(WAYPOINTS_JSON_PATH)
-        self.prepare_playback_trajectory()
-
-    def prepare_playback_trajectory(self):
-        if len(self.recorded_waypoints) < 2:
-            print("Not enough waypoints (need at least 2). Playback not started.")
-            self.is_playing_back = False
-            return
-
-        self.playback_trajectory_abs_poses = []
-        positions = np.array([wp["position"] for wp in self.recorded_waypoints])
-        
-        orientations_xyzw = []
-        for wp in self.recorded_waypoints:
-            wxyz = wp["orientation_wxyz"] # w,x,y,z
-            orientations_xyzw.append([wxyz[1], wxyz[2], wxyz[3], wxyz[0]]) # x,y,z,w for SciPy
-        
-        scipy_rotations = Rotation.from_quat(orientations_xyzw)
-        
-        num_segments = len(self.recorded_waypoints) - 1
-        
-        for i in range(num_segments):
-            # Create N points for the segment, where N = self.steps_per_segment
-            # endpoint=True for the last segment, endpoint=False for others to avoid duplicating waypoints
-            is_last_segment = (i == num_segments - 1)
-            num_points_in_segment = self.steps_per_segment
-            segment_times = np.linspace(0, 1, num_points_in_segment, endpoint=True)
-            if not is_last_segment :
-                 segment_times = segment_times[:-1] # Exclude the last point if not the final segment
-
-            key_rots_segment = Rotation.concatenate([scipy_rotations[i], scipy_rotations[i+1]])
-            slerp_interpolator = Slerp([0, 1], key_rots_segment)
-            for t_sample_idx, t_sample in enumerate(segment_times):
-                interp_pos = positions[i] * (1 - t_sample) + positions[i+1] * t_sample
-                interp_rot_scipy = slerp_interpolator([t_sample])[0]
-                interp_orient_xyzw = interp_rot_scipy.as_quat()
-                interp_orient_wxyz = np.array([interp_orient_xyzw[3], interp_orient_xyzw[0], interp_orient_xyzw[1], interp_orient_xyzw[2]])
-                # Interpolate gripper as step function (use start waypoint's gripper for the segment)
-                interp_gripper = self.recorded_waypoints[i]["gripper"]
-                self.playback_trajectory_abs_poses.append({
-                    "position": interp_pos,
-                    "orientation_wxyz": interp_orient_wxyz,
-                    "gripper": interp_gripper
-                })
-        
-        # Add the very last waypoint explicitly if not perfectly included by linspace due to floating points
-        if len(self.playback_trajectory_abs_poses) > 0 and not np.allclose(self.playback_trajectory_abs_poses[-1]["position"], positions[-1]):
-             self.playback_trajectory_abs_poses.append({
-                "position": positions[-1],
-                "orientation_wxyz": np.array([scipy_rotations[-1].as_quat()[3], *scipy_rotations[-1].as_quat()[:3]]),
-                "gripper": self.recorded_waypoints[-1]["gripper"]
-            })
-        self.current_playback_idx = 0
-        self.is_playing_back = True
-        print(f"Playback trajectory prepared with {len(self.playback_trajectory_abs_poses)} steps.")
-
-    def get_formatted_action_for_playback(self, task_name: str):
-        if not self.is_playing_back or self.current_playback_idx >= len(self.playback_trajectory_abs_poses):
-            self.is_playing_back = False
-            if self.current_playback_idx > 0 and len(self.playback_trajectory_abs_poses) > 0 : # Avoid print if never started
-                print("Playback finished.")
-            return None
-        target_abs_pose = self.playback_trajectory_abs_poses[self.current_playback_idx]
-        self.current_playback_idx += 1
-        target_pos_abs_3D = target_abs_pose["position"]
-        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"]
-        current_gripper_command_bool = target_abs_pose["gripper"]
-        if "Reach" in task_name:
-            # "Reach" tasks expect (absolute_3D_position_numpy, gripper_command_bool)
-            return (target_pos_abs_3D, current_gripper_command_bool)
-        else: # e.g. "Lift" (IK-Rel)
-            # IK-Rel tasks expect (delta_pose_6D_numpy, gripper_command_bool)
-            # delta_pose_6D_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
-            
-            # Accessing robot data for playback - ensure this is also robust or uses the corrected path once found
-            try:
-                ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                current_pos_abs = ee_sensor.data.target_pos_w[0].cpu().numpy().squeeze() # Use target_pos_w and squeeze
-                current_rot_abs_wxyz = ee_sensor.data.target_quat_w[0].cpu().numpy().squeeze() # Use target_quat_w and squeeze
-                print(f"Current_pos_abs({current_pos_abs}) and current_rot_abs_wxyz({current_rot_abs_wxyz})")                
-                
-                delta_pos = target_pos_abs_3D - current_pos_abs
-                
-                R_current = Rotation.from_quat([current_rot_abs_wxyz[1], current_rot_abs_wxyz[2], current_rot_abs_wxyz[3], current_rot_abs_wxyz[0]]) # xyzw
-                R_target = Rotation.from_quat([target_rot_abs_wxyz[1], target_rot_abs_wxyz[2], target_rot_abs_wxyz[3], target_rot_abs_wxyz[0]]) # xyzw
-                
-                R_delta = R_target * R_current.inv()
-                delta_rot_axis_angle = R_delta.as_rotvec() # Returns 3D axis-angle
-
-                delta_pose_command_6D = np.concatenate([delta_pos, delta_rot_axis_angle])
-                return (delta_pose_command_6D, current_gripper_command_bool)
-            except AttributeError as e:
-                print(f"[TrajectoryPlayer Playback ERROR] AttributeError getting current EE state: {e}")
-                self.is_playing_back = False # Potentially stop playback or return a neutral action if state can't be read
-                return None # Stop playback if we can't get current state
-            except KeyError as e:
-                print(f"[TrajectoryPlayer Playback ERROR] KeyError getting current EE state (likely 'robot' not in scene): {e}")
-                self.is_playing_back = False
-                return None
-            except Exception as e:
-                print(f"[TrajectoryPlayer Playback ERROR] Unexpected error getting current EE state: {e}")
-                self.is_playing_back = False
-                return None
-
-    def save_waypoints(self, filepath=WAYPOINTS_JSON_PATH):
-        if not self.recorded_waypoints:
-            print("No waypoints to save.")
-            return
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        waypoints_to_save = []
-        for wp in self.recorded_waypoints:
-            waypoints_to_save.append({
-                "position": wp["position"].tolist(),
-                "orientation_wxyz": wp["orientation_wxyz"].tolist(),
-                "gripper": bool(wp["gripper"])
-            })
-        try:
-            with open(filepath, 'w') as f:
-                json.dump(waypoints_to_save, f, indent=4)
-            print(f"Waypoints saved to {filepath}")
-        except Exception as e:
-            print(f"[TrajectoryPlayer ERROR] Error saving waypoints to {filepath}: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def load_waypoints(self, filepath=WAYPOINTS_JSON_PATH):
-        try:
-            with open(filepath, 'r') as f:
-                loaded_wps_list = json.load(f)
-            self.recorded_waypoints = []
-            for wp_dict in loaded_wps_list:
-                self.recorded_waypoints.append({
-                    "position": np.array(wp_dict["position"]),
-                    "orientation_wxyz": np.array(wp_dict["orientation_wxyz"]),
-                    "gripper": bool(wp_dict.get("gripper", False))
-                })
-            print(f"Waypoints loaded from {filepath}. {len(self.recorded_waypoints)} waypoints found.")
-            if len(self.recorded_waypoints) > 1:
-                print("Press 'L' to start playback with loaded waypoints.")
-            elif len(self.recorded_waypoints) > 0:
-                print("Loaded waypoints, but need at least 2 to form a trajectory.")
-        except FileNotFoundError:
-            print(f"Waypoint file {filepath} not found. No waypoints loaded.")
-        except Exception as e:
-            print(f"Error loading waypoints: {e}")
 
 
 def pre_process_actions(
@@ -391,9 +170,6 @@ def main():
         teleoperation_active = False
         omni.log.info("Teleoperation Deactivated.")
 
-    pos_sens = 0.4 * args_cli.sensitivity
-    rot_sens = 0.4 * args_cli.sensitivity
-
     trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
 
     if args_cli.teleop_device.lower() == "keyboard":
@@ -445,9 +221,9 @@ def main():
 
     # Trajectory Player callbacks
     teleop_interface.add_callback("P", lambda: trajectory_player.record_current_pose(last_teleop_output))      # Record Pose
-    teleop_interface.add_callback("L", lambda: trajectory_player.load_and_playback(WAYPOINTS_JSON_PATH)) # Start Playback (loads + plays)
+    teleop_interface.add_callback("L", lambda: trajectory_player.load_and_playback()) # Start Playback (loads + plays)
     teleop_interface.add_callback("M", trajectory_player.clear_waypoints)          # Clear Waypoints
-    teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints(WAYPOINTS_JSON_PATH)) # Save
+    teleop_interface.add_callback("N", lambda: trajectory_player.save_waypoints()) # Save
 
     print("\n--- Teleoperation Interface Controls ---")
     print(teleop_interface)
