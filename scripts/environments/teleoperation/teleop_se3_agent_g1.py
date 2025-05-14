@@ -289,6 +289,7 @@ def main():
 
             if actions_to_step is not None:
                 obs, rewards, terminated, truncated, info = env.step(actions_to_step)
+
             else:
                 env.sim.render()
 

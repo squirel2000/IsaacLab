@@ -13,8 +13,9 @@ from scipy.spatial.transform import Rotation, Slerp
 
 import omni.log
 
-# Default path for saving/loading waypoints
+# Default paths for saving/loading data
 WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
+JOINT_TRACKING_LOG_PATH = os.path.join("logs", "teleoperation", "joint_tracking_log.json")
 
 class TrajectoryPlayer:
     """
@@ -27,6 +28,7 @@ class TrajectoryPlayer:
     Playback interpolates linearly between positions and uses spherical linear
     interpolation (Slerp) for orientations. Gripper state is held constant
     between waypoints during playback.
+    Also records joint angles during trajectory playback for analysis.
     """
     def __init__(self, env, device_for_torch, steps_per_segment=100):
         """
@@ -51,6 +53,11 @@ class TrajectoryPlayer:
         self.current_playback_idx = 0
         self.is_playing_back = False
         self.steps_per_segment = steps_per_segment
+
+        # Joint tracking data
+        self.joint_tracking_records = []
+        self.sim_time = 0.0
+        self.joint_tracking_active = False
 
     def record_current_pose(self, teleop_output=None):
         """
@@ -127,6 +134,57 @@ class TrajectoryPlayer:
         self.load_waypoints(filepath)
         self.prepare_playback_trajectory()
 
+    def record_joint_state(self, reference_joints, current_joints):
+        """
+        Records joint states during trajectory playback.
+
+        Args:
+            reference_joints: List or array of reference/target joint angles
+            current_joints: List or array of current joint angles
+        """
+        if not self.joint_tracking_active or not self.is_playing_back:
+            return
+
+        entry = {
+            "timestamp": float(self.sim_time),
+            "reference_joint_angles": [float(x) for x in reference_joints],
+            "current_joint_angles": [float(x) for x in current_joints]
+        }
+
+        # Add joint names if available
+        if hasattr(self.env.unwrapped.scene, 'articulations') and "robot" in self.env.unwrapped.scene.articulations:
+            robot_art = self.env.unwrapped.scene.articulations["robot"]
+            if hasattr(robot_art.data, 'joint_names'):
+                entry["joint_names"] = list(robot_art.data.joint_names)
+
+        self.joint_tracking_records.append(entry)
+
+    def clear_joint_tracking_data(self):
+        """
+        Clears recorded joint tracking data and resets timing.
+        """
+        self.joint_tracking_records = []
+        self.sim_time = 0.0
+        self.joint_tracking_active = False
+
+    def save_joint_tracking_data(self):
+        """
+        Saves the recorded joint tracking data to a JSON file.
+        """
+        if not self.joint_tracking_records:
+            print("No joint tracking data to save.")
+            return
+
+        os.makedirs(os.path.dirname(JOINT_TRACKING_LOG_PATH), exist_ok=True)
+        try:
+            with open(JOINT_TRACKING_LOG_PATH, 'w') as f:
+                json.dump(self.joint_tracking_records, f, indent=2)
+            print(f"Joint tracking data saved to {JOINT_TRACKING_LOG_PATH}")
+        except Exception as e:
+            omni.log.error(f"[TrajectoryPlayer ERROR] Error saving joint tracking data: {e}")
+            import traceback
+            traceback.print_exc()
+
     def prepare_playback_trajectory(self):
         """
         Generates the interpolated trajectory steps from the recorded waypoints.
@@ -184,6 +242,8 @@ class TrajectoryPlayer:
 
         self.current_playback_idx = 0
         self.is_playing_back = True
+        self.clear_joint_tracking_data()  # Clear any previous tracking data
+        self.joint_tracking_active = True  # Start joint tracking for this playback
         print(f"Playback trajectory prepared with {len(self.playback_trajectory_abs_poses)} steps.")
 
     def get_formatted_action_for_playback(self, task_name: str):
@@ -198,6 +258,9 @@ class TrajectoryPlayer:
             if playback is finished or an error occurs.
         """
         if not self.is_playing_back or self.current_playback_idx >= len(self.playback_trajectory_abs_poses):
+            if self.joint_tracking_active:
+                self.save_joint_tracking_data()  # Save data when playback ends
+                self.joint_tracking_active = False
             self.is_playing_back = False
             if self.current_playback_idx > 0 and len(self.playback_trajectory_abs_poses) > 0 : # Avoid print if never started
                 print("Playback finished.")
@@ -209,6 +272,26 @@ class TrajectoryPlayer:
         target_pos_abs_3D = target_abs_pose["position"]
         target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"]
         current_gripper_command_bool = target_abs_pose["gripper"]
+
+        # Record joint state for tracking
+        try:
+            if hasattr(self.env.unwrapped, 'scene') and hasattr(self.env.unwrapped.scene, 'articulations'):
+                if "robot" in self.env.unwrapped.scene.articulations:
+                    robot_art = self.env.unwrapped.scene.articulations["robot"]
+                    # Get current joint positions from observation
+                    current_joints = robot_art.data.joint_pos[0].cpu().numpy().tolist()
+                    # For reference joints, use the target/commanded joints from actions
+                    reference_joints = robot_art.data.joint_pos_target[0].cpu().numpy().tolist()
+                    # Get accurate simulation time from robot data
+                    self.sim_time = float(robot_art.data._sim_timestamp)
+
+                    # Record the joint state
+                    self.record_joint_state(reference_joints, current_joints)
+                    
+        except Exception as e:
+            omni.log.error(f"[TrajectoryPlayer ERROR] Error recording joint state: {e}")
+            import traceback
+            traceback.print_exc()
 
         if "Reach" in task_name:
             # "Reach" tasks expect (absolute_3D_position_numpy, gripper_command_bool)
