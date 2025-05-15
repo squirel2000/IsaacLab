@@ -155,18 +155,18 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     pink_ik_cfg = PinkInverseKinematicsActionCfg(
-        # Update controlled joint names for G1 arms
+        # Update controlled joint names for G1 right arm only
         pink_controlled_joint_names=[
-            "left_shoulder_pitch_joint",
-            "left_shoulder_roll_joint",
-            "left_shoulder_yaw_joint",
-            "left_elbow_pitch_joint",
-            "left_elbow_roll_joint", # Added elbow roll for G1
+            # "left_shoulder_pitch_joint",
+            # "left_shoulder_roll_joint",
+            # "left_shoulder_yaw_joint",
+            # "left_elbow_pitch_joint",
+            # "left_elbow_roll_joint",
             "right_shoulder_pitch_joint",
             "right_shoulder_roll_joint",
             "right_shoulder_yaw_joint",
             "right_elbow_pitch_joint",
-            "right_elbow_roll_joint", # Added elbow roll for G1
+            "right_elbow_roll_joint",
         ],
         # Joints to be locked in URDF (updated for G1)
         ik_urdf_fixed_joint_names=[
@@ -193,15 +193,8 @@ class ActionsCfg:
             "right_one_joint",
             "right_two_joint",
         ],
-        # Hand joint names for direct control (G1 hand joints)
+        # Hand joint names for direct control (G1 right hand joints only)
         hand_joint_names=[
-            "left_five_joint",
-            "left_three_joint",
-            "left_six_joint",
-            "left_four_joint",
-            "left_zero_joint",
-            "left_one_joint",
-            "left_two_joint",
             "right_five_joint",
             "right_three_joint",
             "right_six_joint",
@@ -218,25 +211,19 @@ class ActionsCfg:
         controller=PinkIKControllerCfg(
             articulation_name="robot",
             base_link_name="base_link",
-            # Need to update num_hand_joints for G1 (14 joints per hand)
-            num_hand_joints=14, # G1 has 14 hand joints per hand
+            # Update num_hand_joints for G1 right hand only (7 joints)
+            num_hand_joints=7,
             show_ik_warnings=False,
             variable_input_tasks=[
-                # Need to update link names for G1 hands
+                # Update link name for G1 right palm link
                 FrameTask(
-                    "left_hand_link", # Placeholder - need to find actual link name
+                    "right_palm_link",
                     position_cost=1.0,  # [cost] / [m]
                     orientation_cost=1.0,  # [cost] / [rad]
                     lm_damping=10,  # dampening for solver for step jumps
                     gain=0.1,
                 ),
-                FrameTask(
-                    "right_hand_link", # Placeholder - need to find actual link name
-                    position_cost=1.0,  # [cost] / [m]
-                    orientation_cost=1.0,  # [cost] / [rad]
-                    lm_damping=10,  # dampening for solver for step jumps
-                    gain=0.1,
-                ),
+                # Remove left hand task as we only control the right arm
             ],
             fixed_input_tasks=[
                 # COMMENT OUT IF LOCKING WAIST/HEAD
@@ -270,13 +257,15 @@ class ObservationsCfg:
         robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
 
         # Need to update these observation terms for G1
-        left_eef_pos = ObsTerm(func=mdp.get_left_eef_pos) # Need to check if these functions work for G1
-        left_eef_quat = ObsTerm(func=mdp.get_left_eef_quat) # Need to check if these functions work for G1
-        right_eef_pos = ObsTerm(func=mdp.get_right_eef_pos) # Need to check if these functions work for G1
-        right_eef_quat = ObsTerm(func=mdp.get_right_eef_quat) # Need to check if these functions work for G1
+        # Remove left EEF observations as we only control the right arm
+        # left_eef_pos = ObsTerm(func=mdp.get_left_eef_pos) # Need to check if these functions work for G1
+        # left_eef_quat = ObsTerm(func=mdp.get_left_eef_quat) # Need to check if these functions work for G1
+        right_eef_pos = ObsTerm(func=mdp.get_right_eef_pos) # Need to check if this function works for G1 and uses right_palm_link
+        right_eef_quat = ObsTerm(func=mdp.get_right_eef_quat) # Need to check if this function works for G1 and uses right_palm_link
 
-        hand_joint_state = ObsTerm(func=mdp.get_hand_state) # Need to check if this function works for G1
-        head_joint_state = ObsTerm(func=mdp.get_head_state) # Need to check if this function works for G1
+        # Update hand joint state observation to only include right hand joints
+        hand_joint_state = ObsTerm(func=mdp.get_hand_state) # Need to check if this function works for G1 and uses right hand joints
+        # Removed head_joint_state as it's not needed for this task and not defined in mdp
 
         object = ObsTerm(func=mdp.object_obs)
 
@@ -339,15 +328,14 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
     # Position of the XR anchor in the world frame
     xr: XrCfg = XrCfg(
         anchor_pos=(0.0, 0.0, 0.0),
-        anchor_rot=(0.0, 0.0, 0.0), # Changed to 3 elements as per error message
+        anchor_rot=(0.0, 0.0, 0.0),
     )
 
     # Temporary directory for URDF files
     temp_urdf_dir = tempfile.gettempdir()
 
     # Idle action to hold robot in default pose (Need to update for G1)
-    # Action format: [right arm pos (3), right arm quat (4), right hand joint pos (14)]
-    # Assuming we only control the right arm and hand for this task
+    # Action format: [right arm pos (3), right arm quat (4), right hand joint pos (7)]
     idle_action = torch.tensor([
         0.22878, # Example pos_x (need to verify)
         0.2536,  # Example pos_y (need to verify)
@@ -356,8 +344,7 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
         0.5,     # Example quat_x (need to verify)
         -0.5,    # Example quat_y (need to verify)
         0.5,     # Example quat_z (need to verify)
-        # Right hand joint positions (14 joints) - need to verify order and values
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        # Right hand joint positions (7 joints) - need to verify order and values
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     ])
 

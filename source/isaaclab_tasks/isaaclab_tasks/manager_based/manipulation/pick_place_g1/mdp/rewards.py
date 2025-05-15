@@ -10,12 +10,14 @@ from isaaclab.envs import ManagerBasedEnv
 
 def tracking_object_reward(env: ManagerBasedEnv) -> torch.Tensor:
     """Reward for tracking/reaching the object with right hand."""
+    """Reward for tracking/reaching the object with right hand."""
     # Get object and hand positions
     object_pos = env.scene.rigid_objects["object"].data.root_pos_w
     robot = env.scene.articulations["robot"]
-    right_hand_idx = robot.find_bodies(["right_hand_link"])[0]
-    hand_pos = robot.data.body_states_w[right_hand_idx, :3]
-    
+    # Use right_palm_link as the end-effector for tracking
+    right_palm_idx = robot.find_bodies(["right_palm_link"])[0]
+    hand_pos = robot.data.body_states_w[right_palm_idx, :3]
+
     # Calculate distance-based reward
     distance = torch.norm(object_pos - hand_pos, dim=-1)
     reward = 1.0 / (1.0 + distance)  # Normalized [0,1]

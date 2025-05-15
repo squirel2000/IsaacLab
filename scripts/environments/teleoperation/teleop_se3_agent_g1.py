@@ -102,18 +102,26 @@ def pre_process_actions(
         if num_envs > 1 and actions.shape[0] == 1: # repeat if single action for multiple envs
             actions = actions.repeat(num_envs, 1)
         return actions
+    elif "G1" in task_name: # G1 tasks like "PickPlace-G1"
+        # Input from TrajectoryPlayer: (action_array_13D,)
+        # action_array_13D is [right palm pos (3), right palm quat (4), right hand joint pos (7)]
+        action_array_13D = teleop_data[0] # Extract the numpy array from the tuple
+
+        # Convert numpy array to torch tensor and repeat for num_envs
+        actions = torch.tensor(action_array_13D, dtype=torch.float, device=device).repeat(num_envs, 1)
+        return actions
     else: # IK-Rel tasks like "Lift"
         # Input: (delta_pose_6D_numpy, gripper_command_bool)
         # delta_pose_6D_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
         # gripper_command_bool: True for "grip" (close), False for "open" (release)
         delta_pose_6D_np, gripper_cmd_bool = teleop_data
-        
+
         delta_pose_tensor = torch.tensor(delta_pose_6D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
-        
+
         # Gripper command: typically -1 for close (grip), 1 for open (release) in env actions
         gripper_val = -1.0 if gripper_cmd_bool else 1.0
         gripper_action_tensor = torch.full((delta_pose_tensor.shape[0], 1), gripper_val, dtype=torch.float, device=device)
-        
+
         actions = torch.concat([delta_pose_tensor, gripper_action_tensor], dim=1)
         return actions
 
@@ -122,18 +130,32 @@ def main():
     """Running keyboard teleoperation with Isaac Lab manipulation environment."""
     # parse configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    env_cfg.env_name = args_cli.task
-    if hasattr(env_cfg, "terminations"):
-        env_cfg.terminations = {}
-    if "Lift" in args_cli.task:
-        # set the resampling time range to large number to avoid resampling
-        env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
-        # add termination condition for reaching the goal otherwise the environment won't reset
-        # env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
-    elif "Reach" in args_cli.task:
-        if env_cfg.terminations.time_out is None : # Ensure there is a timeout for Reach tasks
-             print(f"Reach task '{args_cli.task}' did not have a time_out termination. Adding a default one.")
-             env_cfg.terminations.time_out = DoneTerm(func=mdp.time_out, time_out=True) # Assuming mdp.time_out is available
+
+    # Safely set env_name if the attribute exists
+    if hasattr(env_cfg, "env_name"):
+        env_cfg.env_name = args_cli.task
+
+    # Safely handle terminations if the attribute exists and is a dictionary
+    if hasattr(env_cfg, "terminations") and isinstance(env_cfg.terminations, dict):
+        # Clear existing terminations if present
+        if env_cfg.terminations is not None:
+             env_cfg.terminations = {}
+
+        if "Lift" in args_cli.task:
+            # set the resampling time range to large number to avoid resampling
+            # Safely access commands if the attribute exists
+            if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
+                env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
+            # add termination condition for reaching the goal otherwise the environment won't reset
+            # if hasattr(mdp, "object_reached_goal"):
+            #     env_cfg.terminations["object_reached_goal"] = DoneTerm(func=mdp.object_reached_goal)
+        elif "Reach" in args_cli.task:
+            # Ensure there is a timeout for Reach tasks
+            if hasattr(env_cfg.terminations, "time_out") and env_cfg.terminations.get("time_out") is None:
+                 print(f"Reach task '{args_cli.task}' did not have a time_out termination. Adding a default one.")
+                 # Assuming mdp.time_out is available and appropriate
+                 if hasattr(mdp, "time_out"):
+                     env_cfg.terminations["time_out"] = DoneTerm(func=mdp.time_out, time_out=True)
 
     print("Active terminations in env_cfg:", getattr(env_cfg, "terminations", None))
 
@@ -144,6 +166,12 @@ def main():
             f"The environment '{args_cli.task}' uses absolute 3D position control for the end-effector. "
             "Orientation commands from SE3 devices will be used to calculate deltas but only position is sent."
         )
+    elif "G1" in args_cli.task:
+         print(
+            f"The environment '{args_cli.task}' uses relative 6D pose control for the right palm link. "
+            "Gripper commands from SE3 devices will control the right hand joints."
+        )
+
 
     # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
@@ -181,7 +209,7 @@ def main():
             pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
         )
     elif args_cli.teleop_device.lower() == "gamepad":
-        teleop_interface = Se3SpaceMouse(
+        teleop_interface = Se3Gamepad(
             pos_sensitivity=0.10 * args_cli.sensitivity, rot_sensitivity=0.10 * args_cli.sensitivity
         )
     elif "dualhandtracking_abs" in args_cli.teleop_device.lower() and "GR1T2" in args_cli.task:

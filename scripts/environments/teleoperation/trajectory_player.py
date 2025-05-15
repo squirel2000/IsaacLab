@@ -12,6 +12,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 import omni.log
+import torch # Import torch
 
 # Default paths for saving/loading data
 WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
@@ -19,20 +20,21 @@ JOINT_TRACKING_LOG_PATH = os.path.join("logs", "teleoperation", "joint_tracking_
 
 class TrajectoryPlayer:
     """
-    Handles recording, saving, loading, and playing back end-effector trajectories.
+    Handles recording, saving, loading, and playing back end-effector trajectories for G1.
 
     A trajectory is a sequence of waypoints, where each waypoint includes the
-    end-effector's absolute position, orientation (as a quaternion), and the
-    gripper command state.
+    right palm link's absolute position, orientation (as a quaternion), and the
+    target joint positions for the right hand.
 
     Playback interpolates linearly between positions and uses spherical linear
-    interpolation (Slerp) for orientations. Gripper state is held constant
+    interpolation (Slerp) for orientations. Hand joint positions are held constant
     between waypoints during playback.
     Also records joint angles during trajectory playback for analysis.
     """
-    def __init__(self, env, device_for_torch, steps_per_segment=100):
+    def __init__(self, env, device_for_torch, steps_per_segment=100,
+                 g1_hand_joints_open: dict = {}, g1_hand_joints_closed: dict = {}):
         """
-        Initializes the TrajectoryPlayer.
+        Initializes the TrajectoryPlayer for G1.
 
         Args:
             env: The Isaac Lab environment instance. Used to access the robot's
@@ -41,18 +43,29 @@ class TrajectoryPlayer:
             steps_per_segment: The number of simulation steps to use for
                                interpolating between two consecutive waypoints
                                during playback.
+            g1_hand_joints_open: Dictionary of joint names and positions for open hand.
+            g1_hand_joints_closed: Dictionary of joint names and positions for closed hand.
         """
         self.env = env
         self.torch_device = device_for_torch
         # List of recorded waypoints. Each waypoint is a dict:
-        # {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
+        # {"palm_position": np.array, "palm_orientation_wxyz": np.array, "hand_joint_positions": np.array}
         self.recorded_waypoints = []
         # List of interpolated poses for playback. Each element is a dict:
-        # {"position": np.array, "orientation_wxyz": np.array, "gripper": bool}
+        # {"palm_position": np.array, "palm_orientation_wxyz": np.array, "hand_joint_positions": np.array}
         self.playback_trajectory_abs_poses = []
         self.current_playback_idx = 0
         self.is_playing_back = False
         self.steps_per_segment = steps_per_segment
+
+        # G1 Hand joint configurations
+        self.g1_hand_joints_open = g1_hand_joints_open
+        self.g1_hand_joints_closed = g1_hand_joints_closed
+        self.right_hand_joint_names = [
+            "right_five_joint", "right_three_joint", "right_six_joint",
+            "right_four_joint", "right_zero_joint", "right_one_joint",
+            "right_two_joint",
+        ] # Order should match the action space expectation
 
         # Joint tracking data
         self.joint_tracking_records = []
@@ -61,52 +74,78 @@ class TrajectoryPlayer:
 
     def record_current_pose(self, teleop_output=None):
         """
-        Record the current end-effector pose and gripper command as a waypoint.
+        Record the current right palm link pose and right hand joint positions as a waypoint.
 
-        If teleop_output is provided, extracts the gripper command from it.
-        Requires the environment's scene to have an "ee_frame" sensor with
-        'target_pos_w' and 'target_quat_w' data attributes.
+        If teleop_output is provided, extracts the boolean gripper command from it
+        to determine the target hand joint positions (open or closed).
 
         Args:
             teleop_output: Optional. The raw output from the teleoperation device.
                            Expected to be a tuple where the second element is
-                           the boolean gripper command.
+                           the boolean gripper command (True for close, False for open).
         """
         if self.is_playing_back:
             print("Cannot record waypoints while playback is active. Stop playback first.")
             return
 
         # Extract gripper command from teleop_output if available
-        gripper_command = False
+        gripper_command_bool = False
         if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
-            gripper_command = teleop_output[1]
+            gripper_command_bool = teleop_output[1]
 
         try:
-            # Access the end-effector sensor data to get the current pose
-            if hasattr(self.env.unwrapped.scene, 'sensors') and "ee_frame" in self.env.unwrapped.scene.sensors:
-                ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                if hasattr(ee_sensor, 'data') and hasattr(ee_sensor.data, 'target_pos_w') and hasattr(ee_sensor.data, 'target_quat_w'):
-                    # Use target_pos_w and target_quat_w which represent the commanded pose
-                    pos_tensor = ee_sensor.data.target_pos_w[0]
-                    orient_tensor_wxyz = ee_sensor.data.target_quat_w[0]
+            # Access the robot articulation
+            if hasattr(self.env.unwrapped, 'scene') and hasattr(self.env.unwrapped.scene, 'articulations') and "robot" in self.env.unwrapped.scene.articulations:
+                robot = self.env.unwrapped.scene.articulations["robot"]
 
-                    # Convert tensors to numpy arrays and squeeze to remove batch dimension
-                    pos = pos_tensor.cpu().numpy().squeeze()
-                    orient_wxyz = orient_tensor_wxyz.cpu().numpy().squeeze()
-                    gripper = gripper_command
+                # Get the right palm link pose
+                # Assuming body_states_w is available and indexed by body index
+                if hasattr(robot.data, 'body_states_w'):
+                    right_palm_idx = robot.find_bodies(["right_palm_link"])[0]
+                    palm_pos_tensor = robot.data.body_states_w[0, right_palm_idx, :3] # Assuming batch size 1
+                    palm_orient_tensor_wxyz = robot.data.body_states_w[0, right_palm_idx, 3:7] # Assuming batch size 1
 
-                    # Store the waypoint
-                    self.recorded_waypoints.append({
-                        "position": pos,
-                        "orientation_wxyz": orient_wxyz,
-                        "gripper": gripper
-                    })
-                    print(f"Waypoint {len(self.recorded_waypoints)} recorded: pos={pos}, orient_wxyz={orient_wxyz}, gripper={gripper}")
-                    return
+                    # Get the current right hand joint positions
+                    if hasattr(robot.data, 'joint_pos'):
+                        right_hand_joint_indices = robot.find_joints(self.right_hand_joint_names)
+                        current_hand_joint_pos_tensor = robot.data.joint_pos[0, right_hand_joint_indices] # Assuming batch size 1
+
+                        # Determine target hand joint positions based on gripper command
+                        target_hand_joint_positions = np.zeros(len(self.right_hand_joint_names))
+                        if gripper_command_bool and self.g1_hand_joints_closed:
+                            # Use closed positions, ensuring correct order
+                            target_hand_joint_positions = np.array([self.g1_hand_joints_closed.get(name, 0.0) for name in self.right_hand_joint_names])
+                        elif not gripper_command_bool and self.g1_hand_joints_open:
+                             # Use open positions, ensuring correct order
+                             target_hand_joint_positions = np.array([self.g1_hand_joints_open.get(name, 0.0) for name in self.right_hand_joint_names])
+                        else:
+                             # If configs not provided, use current hand joint positions
+                             target_hand_joint_positions = current_hand_joint_pos_tensor.cpu().numpy().squeeze()
+                             if gripper_command_bool:
+                                 omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_CLOSED not provided. Recording current hand joint positions for 'closed' command.")
+                             else:
+                                 omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_OPEN not provided. Recording current hand joint positions for 'open' command.")
+
+
+                        # Convert tensors to numpy arrays and squeeze
+                        palm_pos = palm_pos_tensor.cpu().numpy().squeeze()
+                        palm_orient_wxyz = palm_orient_tensor_wxyz.cpu().numpy().squeeze()
+
+                        # Store the waypoint
+                        self.recorded_waypoints.append({
+                            "palm_position": palm_pos,
+                            "palm_orientation_wxyz": palm_orient_wxyz,
+                            "hand_joint_positions": target_hand_joint_positions
+                        })
+                        print(f"Waypoint {len(self.recorded_waypoints)} recorded: palm_pos={palm_pos}, palm_orient_wxyz={palm_orient_wxyz}, hand_joint_positions={target_hand_joint_positions}")
+                        return
+                    else:
+                         omni.log.warn("[TrajectoryPlayer] Robot articulation data 'joint_pos' not found.")
                 else:
-                    omni.log.warn("[TrajectoryPlayer] EE sensor data or required attributes not found.")
+                    omni.log.warn("[TrajectoryPlayer] Robot articulation data 'body_states_w' not found.")
             else:
-                omni.log.warn("[TrajectoryPlayer] 'ee_frame' sensor not found in scene.sensors.")
+                omni.log.warn("[TrajectoryPlayer] Robot articulation not found in scene.")
+
         except Exception as e:
             omni.log.error(f"[TrajectoryPlayer ERROR] Unexpected error in record_current_pose: {e}")
             import traceback
@@ -189,8 +228,8 @@ class TrajectoryPlayer:
         """
         Generates the interpolated trajectory steps from the recorded waypoints.
 
-        Uses linear interpolation for position and Slerp for orientation
-        between consecutive waypoints.
+        Uses linear interpolation for palm position and Slerp for palm orientation.
+        Hand joint positions are held constant between waypoints.
         """
         if len(self.recorded_waypoints) < 2:
             print("Not enough waypoints (need at least 2). Playback not started.")
@@ -198,15 +237,15 @@ class TrajectoryPlayer:
             return
 
         self.playback_trajectory_abs_poses = []
-        positions = np.array([wp["position"] for wp in self.recorded_waypoints])
+        palm_positions = np.array([wp["palm_position"] for wp in self.recorded_waypoints])
 
         # Convert wxyz quaternions to xyzw format for SciPy Rotation
-        orientations_xyzw = []
+        palm_orientations_xyzw = []
         for wp in self.recorded_waypoints:
-            wxyz = wp["orientation_wxyz"]
-            orientations_xyzw.append([wxyz[1], wxyz[2], wxyz[3], wxyz[0]])
+            wxyz = wp["palm_orientation_wxyz"]
+            palm_orientations_xyzw.append([wxyz[1], wxyz[2], wxyz[3], wxyz[0]])
 
-        scipy_rotations = Rotation.from_quat(orientations_xyzw)
+        scipy_rotations = Rotation.from_quat(palm_orientations_xyzw)
 
         num_segments = len(self.recorded_waypoints) - 1
 
@@ -223,10 +262,10 @@ class TrajectoryPlayer:
             interp_rot_scipy = slerp_interpolator(segment_times)
 
             # Interpolate position linearly
-            interp_pos = positions[i, None] * (1 - segment_times[:, None]) + positions[i+1, None] * segment_times[:, None]
+            interp_pos = palm_positions[i, None] * (1 - segment_times[:, None]) + palm_positions[i+1, None] * segment_times[:, None]
 
-            # Get gripper state (held constant for the segment from the start waypoint)
-            interp_gripper = self.recorded_waypoints[i]["gripper"]
+            # Hand joint positions (held constant for the segment from the start waypoint)
+            interp_hand_joints = self.recorded_waypoints[i]["hand_joint_positions"]
 
             # Convert interpolated SciPy rotations back to wxyz numpy arrays
             interp_orient_xyzw = interp_rot_scipy.as_quat()
@@ -235,9 +274,9 @@ class TrajectoryPlayer:
             # Append interpolated poses to the playback trajectory
             for j in range(len(segment_times)):
                  self.playback_trajectory_abs_poses.append({
-                    "position": interp_pos[j],
-                    "orientation_wxyz": interp_orient_wxyz[j],
-                    "gripper": interp_gripper
+                    "palm_position": interp_pos[j],
+                    "palm_orientation_wxyz": interp_orient_wxyz[j],
+                    "hand_joint_positions": interp_hand_joints
                 })
 
         self.current_playback_idx = 0
@@ -248,14 +287,15 @@ class TrajectoryPlayer:
 
     def get_formatted_action_for_playback(self, task_name: str):
         """
-        Gets the next action command from the playback trajectory.
+        Gets the next action command from the playback trajectory for G1.
 
         Args:
             task_name: The name of the current task environment.
 
         Returns:
-            A tuple representing the action command for the environment, or None
-            if playback is finished or an error occurs.
+            A numpy array representing the action command for the environment,
+            or None if playback is finished.
+            Action format: [right palm pos (3), right palm quat (4), right hand joint pos (7)]
         """
         if not self.is_playing_back or self.current_playback_idx >= len(self.playback_trajectory_abs_poses):
             if self.joint_tracking_active:
@@ -266,76 +306,58 @@ class TrajectoryPlayer:
                 print("Playback finished.")
             return None
 
-        # Get the target pose and gripper command for the current step
+        # Get the target pose and hand joint positions for the current step
         target_abs_pose = self.playback_trajectory_abs_poses[self.current_playback_idx]
         self.current_playback_idx += 1
-        target_pos_abs_3D = target_abs_pose["position"]
-        target_rot_abs_wxyz = target_abs_pose["orientation_wxyz"]
-        current_gripper_command_bool = target_abs_pose["gripper"]
+        target_palm_pos_3D = target_abs_pose["palm_position"]
+        target_palm_orient_wxyz = target_abs_pose["palm_orientation_wxyz"]
+        target_hand_joint_positions = target_abs_pose["hand_joint_positions"]
 
-        # Record joint state for tracking
+        # Record joint state for tracking (optional, can be removed if not needed)
         try:
             if hasattr(self.env.unwrapped, 'scene') and hasattr(self.env.unwrapped.scene, 'articulations'):
                 if "robot" in self.env.unwrapped.scene.articulations:
                     robot_art = self.env.unwrapped.scene.articulations["robot"]
                     # Get current joint positions from observation
-                    current_joints = robot_art.data.joint_pos[0].cpu().numpy().tolist()
-                    # For reference joints, use the target/commanded joints from actions
-                    reference_joints = robot_art.data.joint_pos_target[0].cpu().numpy().tolist()
-                    # Get accurate simulation time from robot data
-                    self.sim_time = float(robot_art.data._sim_timestamp)
+                    if hasattr(robot_art.data, 'joint_pos'):
+                         current_joints = robot_art.data.joint_pos[0].cpu().numpy().tolist()
+                         # For reference joints, use the target/commanded joints from actions
+                         # Note: This might not be accurate if the environment's action mapping is complex.
+                         # A more robust approach might involve storing the commanded joint targets during recording.
+                         reference_joints = getattr(robot_art.data, 'joint_pos_target', torch.zeros_like(robot_art.data.joint_pos))[0].cpu().numpy().tolist()
+                         # Get accurate simulation time from robot data
+                         self.sim_time = float(getattr(robot_art.data, '_sim_timestamp', self.sim_time))
 
-                    # Record the joint state
-                    self.record_joint_state(reference_joints, current_joints)
-                    
+                         # Record the joint state
+                         self.record_joint_state(reference_joints, current_joints)
+                    else:
+                         omni.log.warn("[TrajectoryPlayer Playback] Robot articulation data 'joint_pos' not found for tracking.")
+
         except Exception as e:
-            omni.log.error(f"[TrajectoryPlayer ERROR] Error recording joint state: {e}")
+            omni.log.error(f"[TrajectoryPlayer Playback ERROR] Error recording joint state: {e}")
             import traceback
             traceback.print_exc()
 
-        if "Reach" in task_name:
-            # "Reach" tasks expect (absolute_3D_position_numpy, gripper_command_bool)
-            # Note: Gripper command is often ignored by "Reach" tasks, but we pass it for consistency.
-            return (target_pos_abs_3D, current_gripper_command_bool)
-        else: # e.g. "Lift" (IK-Rel)
-            # IK-Rel tasks expect (delta_pose_6D_numpy, gripper_command_bool)
-            # delta_pose_6D_numpy is [dx, dy, dz, d_ax, d_ay, d_az] (axis-angle for rotation)
+        # Convert target palm orientation from WXYZ to XYZW for the action
+        target_palm_orient_xyzw = np.array([
+            target_palm_orient_wxyz[1],
+            target_palm_orient_wxyz[2],
+            target_palm_orient_wxyz[3],
+            target_palm_orient_wxyz[0],
+        ])
 
-            # Need the current EE pose to calculate the delta pose
-            try:
-                if hasattr(self.env.unwrapped.scene, 'sensors') and "ee_frame" in self.env.unwrapped.scene.sensors:
-                    ee_sensor = self.env.unwrapped.scene.sensors["ee_frame"]
-                    if hasattr(ee_sensor, 'data') and hasattr(ee_sensor.data, 'target_pos_w') and hasattr(ee_sensor.data, 'target_quat_w'):
-                        # Use target_pos_w and target_quat_w for current pose
-                        current_pos_abs = ee_sensor.data.target_pos_w[0].cpu().numpy().squeeze()
-                        current_rot_abs_wxyz = ee_sensor.data.target_quat_w[0].cpu().numpy().squeeze()
-                        # print(f"Current_pos_abs({current_pos_abs}) and current_rot_abs_wxyz({current_rot_abs_wxyz})") # Debug print
+        # Combine into the 13-element action tensor
+        action = np.concatenate([
+            target_palm_pos_3D,
+            target_palm_orient_xyzw,
+            target_hand_joint_positions
+        ])
 
-                        # Calculate delta position
-                        delta_pos = target_pos_abs_3D - current_pos_abs
+        # Return as a tuple containing the single action array
+        # The pre_process_actions function in teleop_se3_agent_g1.py expects a tuple
+        # for playback data, even if it's just one element.
+        return (action,)
 
-                        # Calculate delta rotation using quaternion inversion and multiplication
-                        R_current = Rotation.from_quat([current_rot_abs_wxyz[1], current_rot_abs_wxyz[2], current_rot_abs_wxyz[3], current_rot_abs_wxyz[0]]) # xyzw
-                        R_target = Rotation.from_quat([target_rot_abs_wxyz[1], target_rot_abs_wxyz[2], target_rot_abs_wxyz[3], target_rot_abs_wxyz[0]]) # xyzw
-
-                        R_delta = R_target * R_current.inv()
-                        delta_rot_axis_angle = R_delta.as_rotvec() # Returns 3D axis-angle
-
-                        # Combine delta position and delta rotation into a 6D pose command
-                        delta_pose_command_6D = np.concatenate([delta_pos, delta_rot_axis_angle])
-                        return (delta_pose_command_6D, current_gripper_command_bool)
-                    else:
-                         omni.log.warn("[TrajectoryPlayer Playback] EE sensor data or required attributes not found for delta calculation.")
-                         self.is_playing_back = False
-                         return None
-                else:
-                    omni.log.warn("[TrajectoryPlayer Playback] 'ee_frame' sensor not found for delta calculation.")
-                    self.is_playing_back = False
-                    return None
-            except Exception as e:
-                omni.log.error(f"[TrajectoryPlayer Playback ERROR] Unexpected error getting current EE state or calculating delta: {e}")
-                self.is_playing_back = False # Stop playback on error
-                return None
 
     def save_waypoints(self, filepath=WAYPOINTS_JSON_PATH):
         """
@@ -353,9 +375,9 @@ class TrajectoryPlayer:
         for wp in self.recorded_waypoints:
             # Convert numpy arrays to lists for JSON serialization
             waypoints_to_save.append({
-                "position": wp["position"].tolist(),
-                "orientation_wxyz": wp["orientation_wxyz"].tolist(),
-                "gripper": bool(wp["gripper"]) # Ensure boolean type
+                "palm_position": wp["palm_position"].tolist(),
+                "palm_orientation_wxyz": wp["palm_orientation_wxyz"].tolist(),
+                "hand_joint_positions": wp["hand_joint_positions"].tolist()
             })
         try:
             with open(filepath, 'w') as f:
@@ -380,9 +402,9 @@ class TrajectoryPlayer:
             for wp_dict in loaded_wps_list:
                 # Convert lists back to numpy arrays
                 self.recorded_waypoints.append({
-                    "position": np.array(wp_dict["position"]),
-                    "orientation_wxyz": np.array(wp_dict["orientation_wxyz"]),
-                    "gripper": bool(wp_dict.get("gripper", False)) # Handle missing gripper key with default False
+                    "palm_position": np.array(wp_dict["palm_position"]),
+                    "palm_orientation_wxyz": np.array(wp_dict["palm_orientation_wxyz"]),
+                    "hand_joint_positions": np.array(wp_dict.get("hand_joint_positions", np.zeros(len(self.right_hand_joint_names)))) # Handle missing key with default
                 })
             print(f"Waypoints loaded from {filepath}. {len(self.recorded_waypoints)} waypoints found.")
             if len(self.recorded_waypoints) > 1:
