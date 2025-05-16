@@ -61,11 +61,16 @@ class TrajectoryPlayer:
         # G1 Hand joint configurations
         self.g1_hand_joints_open = g1_hand_joints_open
         self.g1_hand_joints_closed = g1_hand_joints_closed
+        # List of right hand joint names for G1.
+        # Based on the provided link list and common hand structures, these are
+        # the likely controllable joints for the right hand.
+        # IMPORTANT: The order of these joint names must match the order expected
+        # by the G1 environment's action space for the hand joints.
         self.right_hand_joint_names = [
             "right_five_joint", "right_three_joint", "right_six_joint",
             "right_four_joint", "right_zero_joint", "right_one_joint",
             "right_two_joint",
-        ] # Order should match the action space expectation
+        ]
 
         # Joint tracking data
         self.joint_tracking_records = []
@@ -78,6 +83,8 @@ class TrajectoryPlayer:
 
         If teleop_output is provided, extracts the boolean gripper command from it
         to determine the target hand joint positions (open or closed).
+        For G1, the gripper command (True/False) is used to select between
+        pre-defined open or closed hand joint configurations.
 
         Args:
             teleop_output: Optional. The raw output from the teleoperation device.
@@ -89,6 +96,7 @@ class TrajectoryPlayer:
             return
 
         # Extract gripper command from teleop_output if available
+        # For keyboard, this comes from the gripper button (e.g., 'G')
         gripper_command_bool = False
         if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
             gripper_command_bool = teleop_output[1]
@@ -101,48 +109,55 @@ class TrajectoryPlayer:
                 # Get the right palm link pose
                 # Assuming body_states_w is available and indexed by body index
                 if hasattr(robot.data, 'body_states_w'):
+                    # Find the body index for the right_palm_link
                     right_palm_idx = robot.find_bodies(["right_palm_link"])[0]
                     palm_pos_tensor = robot.data.body_states_w[0, right_palm_idx, :3] # Assuming batch size 1
                     palm_orient_tensor_wxyz = robot.data.body_states_w[0, right_palm_idx, 3:7] # Assuming batch size 1
 
-                    # Get the current right hand joint positions
-                    if hasattr(robot.data, 'joint_pos'):
-                        right_hand_joint_indices = robot.find_joints(self.right_hand_joint_names)
-                        current_hand_joint_pos_tensor = robot.data.joint_pos[0, right_hand_joint_indices] # Assuming batch size 1
-
-                        # Determine target hand joint positions based on gripper command
-                        target_hand_joint_positions = np.zeros(len(self.right_hand_joint_names))
-                        if gripper_command_bool and self.g1_hand_joints_closed:
+                    # Determine target hand joint positions based on gripper command
+                    target_hand_joint_positions = np.zeros(len(self.right_hand_joint_names))
+                    if gripper_command_bool: # Gripper command is True (close)
+                        if self.g1_hand_joints_closed:
                             # Use closed positions, ensuring correct order
                             target_hand_joint_positions = np.array([self.g1_hand_joints_closed.get(name, 0.0) for name in self.right_hand_joint_names])
-                        elif not gripper_command_bool and self.g1_hand_joints_open:
+                        else:
+                             # Fallback to current positions if closed config not provided
+                             if hasattr(robot.data, 'joint_pos'):
+                                right_hand_joint_indices = robot.find_joints(self.right_hand_joint_names)
+                                target_hand_joint_positions = robot.data.joint_pos[0, right_hand_joint_indices].cpu().numpy().squeeze()
+                                omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_CLOSED not provided. Recording current hand joint positions for 'close' command.")
+                             else:
+                                 omni.log.warn("[TrajectoryPlayer] Robot articulation data 'joint_pos' not found. Cannot record current hand joint positions.")
+                                 # Keep target_hand_joint_positions as zeros if current pos not available
+                    else: # Gripper command is False (open)
+                        if self.g1_hand_joints_open:
                              # Use open positions, ensuring correct order
                              target_hand_joint_positions = np.array([self.g1_hand_joints_open.get(name, 0.0) for name in self.right_hand_joint_names])
                         else:
-                             # If configs not provided, use current hand joint positions
-                             target_hand_joint_positions = current_hand_joint_pos_tensor.cpu().numpy().squeeze()
-                             if gripper_command_bool:
-                                 omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_CLOSED not provided. Recording current hand joint positions for 'closed' command.")
+                             # Fallback to current positions if open config not provided
+                             if hasattr(robot.data, 'joint_pos'):
+                                right_hand_joint_indices = robot.find_joints(self.right_hand_joint_names)
+                                target_hand_joint_positions = robot.data.joint_pos[0, right_hand_joint_indices].cpu().numpy().squeeze()
+                                omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_OPEN not provided. Recording current hand joint positions for 'open' command.")
                              else:
-                                 omni.log.warn("[TrajectoryPlayer] G1_HAND_JOINTS_OPEN not provided. Recording current hand joint positions for 'open' command.")
+                                 omni.log.warn("[TrajectoryPlayer] Robot articulation data 'joint_pos' not found. Cannot record current hand joint positions.")
+                                 # Keep target_hand_joint_positions as zeros if current pos not available
 
 
-                        # Convert tensors to numpy arrays and squeeze
-                        palm_pos = palm_pos_tensor.cpu().numpy().squeeze()
-                        palm_orient_wxyz = palm_orient_tensor_wxyz.cpu().numpy().squeeze()
+                    # Convert tensors to numpy arrays and squeeze
+                    palm_pos = palm_pos_tensor.cpu().numpy().squeeze()
+                    palm_orient_wxyz = palm_orient_tensor_wxyz.cpu().numpy().squeeze()
 
-                        # Store the waypoint
-                        self.recorded_waypoints.append({
-                            "palm_position": palm_pos,
-                            "palm_orientation_wxyz": palm_orient_wxyz,
-                            "hand_joint_positions": target_hand_joint_positions
-                        })
-                        print(f"Waypoint {len(self.recorded_waypoints)} recorded: palm_pos={palm_pos}, palm_orient_wxyz={palm_orient_wxyz}, hand_joint_positions={target_hand_joint_positions}")
-                        return
-                    else:
-                         omni.log.warn("[TrajectoryPlayer] Robot articulation data 'joint_pos' not found.")
+                    # Store the waypoint
+                    self.recorded_waypoints.append({
+                        "palm_position": palm_pos,
+                        "palm_orientation_wxyz": palm_orient_wxyz,
+                        "hand_joint_positions": target_hand_joint_positions
+                    })
+                    print(f"Waypoint {len(self.recorded_waypoints)} recorded: palm_pos={palm_pos}, palm_orient_wxyz={palm_orient_wxyz}, hand_joint_positions={target_hand_joint_positions}")
+                    return
                 else:
-                    omni.log.warn("[TrajectoryPlayer] Robot articulation data 'body_states_w' not found.")
+                     omni.log.warn("[TrajectoryPlayer] Robot articulation data 'body_states_w' not found.")
             else:
                 omni.log.warn("[TrajectoryPlayer] Robot articulation not found in scene.")
 
@@ -191,10 +206,14 @@ class TrajectoryPlayer:
         }
 
         # Add joint names if available
-        if hasattr(self.env.unwrapped.scene, 'articulations') and "robot" in self.env.unwrapped.scene.articulations:
-            robot_art = self.env.unwrapped.scene.articulations["robot"]
-            if hasattr(robot_art.data, 'joint_names'):
-                entry["joint_names"] = list(robot_art.data.joint_names)
+        try:
+            if hasattr(self.env.unwrapped, 'scene') and hasattr(self.env.unwrapped.scene, 'articulations') and "robot" in self.env.unwrapped.scene.articulations:
+                robot_art = self.env.unwrapped.scene.articulations["robot"]
+                if hasattr(robot_art.data, 'joint_names'):
+                    entry["joint_names"] = list(robot_art.data.joint_names)
+        except Exception as e:
+             omni.log.warn(f"[TrajectoryPlayer Tracking] Could not get joint names for tracking: {e}")
+
 
         self.joint_tracking_records.append(entry)
 

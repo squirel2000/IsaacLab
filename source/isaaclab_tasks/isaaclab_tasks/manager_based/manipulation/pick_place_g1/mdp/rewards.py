@@ -7,50 +7,56 @@
 
 import torch
 from isaaclab.envs import ManagerBasedEnv
+# if you use observations from your mdp.observations, import them
+from .observations import get_right_eef_pos
 
-def tracking_object_reward(env: ManagerBasedEnv) -> torch.Tensor:
-    """Reward for tracking/reaching the object with right hand."""
-    """Reward for tracking/reaching the object with right hand."""
-    # Get object and hand positions
+def tracking_object_reward(env: ManagerBasedEnv, std: float = 0.1) -> torch.Tensor:
+    """Reward for tracking/reaching the object with right hand, based on distance."""
     object_pos = env.scene.rigid_objects["object"].data.root_pos_w
-    robot = env.scene.articulations["robot"]
-    # Use right_palm_link as the end-effector for tracking
-    right_palm_idx = robot.find_bodies(["right_palm_link"])[0]
-    hand_pos = robot.data.body_states_w[right_palm_idx, :3]
+    # Use the observation function for consistency if available and it returns world pos
+    hand_pos = get_right_eef_pos(env) # This gets world position of right_palm_link
 
-    # Calculate distance-based reward
-    distance = torch.norm(object_pos - hand_pos, dim=-1)
-    reward = 1.0 / (1.0 + distance)  # Normalized [0,1]
+    distance = torch.norm(object_pos - hand_pos, p=2, dim=-1)
+    # Gaussian-like reward: exp(-distance^2 / (2 * std^2))
+    reward = torch.exp(-torch.square(distance) / (2 * std**2))
     return reward
 
-def lifting_reward(env: ManagerBasedEnv) -> torch.Tensor:
-    """Reward for lifting the object."""
-    object_height = env.scene.rigid_objects["object"].data.root_pos_w[..., 2]
-    initial_height = 1.0413  # From scene config
-    min_lift = 0.1  # Minimum lift height for reward
+def lifting_reward(env: ManagerBasedEnv, target_lift_height: float = 0.15) -> torch.Tensor:
+    """Reward for lifting the object above a certain height from its initial spawn."""
+    # Assuming initial height is related to table height or a known spawn Z.
+    # For simplicity, let's use current height relative to a dynamic "lifted" threshold.
+    # A better way would be to store initial object height at reset.
+    # Here, we check if object is above its spawn Z + target_lift_height
     
-    # Reward for lifting above minimum height
-    lift_amount = object_height - initial_height
-    reward = torch.where(lift_amount > min_lift, 
-                        1.0 + 0.5 * lift_amount,  # Bonus for higher lifts
-                        0.0)
+    # This requires knowing the object's initial Z. If object is reset to a fixed height:
+    initial_height_on_table = env.scene.cfg.object.init_state.pos[2] # Example: 0.8 for cube on table
+                                                                    # Or get from observations if it's randomized
+
+    object_current_height = env.scene.rigid_objects["object"].data.root_pos_w[..., 2]
+    
+    is_lifted = object_current_height > (initial_height_on_table + target_lift_height / 2) # Small lift
+    bonus_for_higher_lift = torch.clamp(
+        (object_current_height - (initial_height_on_table + target_lift_height / 2)) / target_lift_height,
+        0.0, 1.0 # Normalize bonus
+    )
+    
+    reward = torch.where(is_lifted, 0.5 + 0.5 * bonus_for_higher_lift, torch.zeros_like(object_current_height))
     return reward
 
-def reaching_target_reward(env: ManagerBasedEnv) -> torch.Tensor:
-    """Reward for reaching target placement position."""
-    # Get current object position
+
+def reaching_target_reward(env: ManagerBasedEnv, target_pos_tensor: torch.Tensor, std: float = 0.05) -> torch.Tensor:
+    """Reward for placing the object near a target position."""
+    # target_pos_tensor should be defined and passed, e.g., from a curriculum or fixed goal
+    # Example: target_pos = torch.tensor([0.3, 0.4, 0.8], device=env.device)
+    
     object_pos = env.scene.rigid_objects["object"].data.root_pos_w
+    distance = torch.norm(object_pos - target_pos_tensor.unsqueeze(0).repeat(env.num_envs, 1), p=2, dim=-1)
     
-    # Define target position (customize based on task)
-    target_pos = torch.tensor([0.3, 0.4, 1.0], device=env.device)
-    
-    # Distance-based reward
-    distance = torch.norm(object_pos - target_pos, dim=-1)
-    reward = 1.0 / (1.0 + distance)
-    
-    # Bonus for very close placement
-    close_threshold = 0.05
-    reward = torch.where(distance < close_threshold,
-                        reward + 1.0,  # Bonus for close placement
-                        reward)
+    reward = torch.exp(-torch.square(distance) / (2 * std**2))
     return reward
+
+# Add other rewards like:
+# - Hand orientation reward (e.g., for grasping)
+# - Smoothness rewards for actions
+# - Penalty for excessive joint movement or torques
+# - Penalty for object dropping (can also be a termination)

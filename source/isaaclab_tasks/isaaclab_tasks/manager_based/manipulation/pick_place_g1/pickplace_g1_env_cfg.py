@@ -6,7 +6,7 @@
 import tempfile
 import torch
 
-from pink.tasks import FrameTask
+from pink.tasks import FrameTask # Make sure pink is installed if this is a direct import
 
 import isaaclab.controllers.utils as ControllerUtils
 import isaaclab.envs.mdp as base_mdp
@@ -26,35 +26,36 @@ from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdF
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
-from . import mdp
+from . import mdp # Assuming mdp is a sub-module (observations.py, rewards.py, terminations.py)
 
 # Import G1_CFG instead of GR1T2_CFG
 from isaaclab_assets.robots.unitree import G1_CFG  # isort: skip
 
 # Pre-defined G1 Hand joint positions for open/closed state
 # IMPORTANT: Verify these joint values and order based on G1's actual model and desired grip
-G1_HAND_JOINTS_OPEN = {
-    # Left Hand (match order in hand_joint_names)
-    "left_zero_joint": 0.0, "left_one_joint": 0.0, "left_two_joint": 0.0,
-    "left_three_joint": 0.0, "left_four_joint": 0.0, "left_five_joint": 0.0,
-    "left_six_joint": 0.0,
-    # Right Hand (match order in hand_joint_names)
+# These names should match the `hand_joint_names` in ActionsCfg
+G1_RIGHT_HAND_JOINT_NAMES_ORDERED = [
+    "right_five_joint", "right_three_joint", "right_six_joint",
+    "right_four_joint", "right_zero_joint", "right_one_joint",
+    "right_two_joint",
+]
+
+G1_HAND_JOINTS_OPEN_DICT = {
     "right_zero_joint": 0.0, "right_one_joint": 0.0, "right_two_joint": 0.0,
     "right_three_joint": 0.0, "right_four_joint": 0.0, "right_five_joint": 0.0,
     "right_six_joint": 0.0,
 }
-G1_HAND_JOINTS_CLOSED = {
-    # Left Hand (match order in hand_joint_names) - Keep open as we control right
-    "left_zero_joint": 0.0, "left_one_joint": 0.0, "left_two_joint": 0.0,
-    "left_three_joint": 0.0, "left_four_joint": 0.0, "left_five_joint": 0.0,
-    "left_six_joint": 0.0,
-    # Right Hand (match order in hand_joint_names) - Define a closed pose
-    "right_zero_joint": 1.5, "right_one_joint": 1.5, "right_two_joint": 1.5,
-    "right_three_joint": 1.5, "right_four_joint": 1.5, "right_five_joint": 1.5,
-    "right_six_joint": 1.5, # Adjust these values for desired grip
+G1_HAND_JOINTS_CLOSED_DICT = {
+    "right_zero_joint": 1.0, "right_one_joint": 1.0, "right_two_joint": 1.0, # Adjust these values
+    "right_three_joint": 1.0, "right_four_joint": 1.0, "right_five_joint": 1.0,
+    "right_six_joint": 1.0, # Adjust these values for desired grip
 }
+
 # Convert to ordered lists based on hand_joint_names defined later in ActionsCfg
-# We will define the ordered lists inside ActionsCfg where hand_joint_names is defined.
+# These can be used by TrajectoryPlayer or other components if needed.
+G1_HAND_JOINTS_OPEN_ORDERED = [G1_HAND_JOINTS_OPEN_DICT.get(name, 0.0) for name in G1_RIGHT_HAND_JOINT_NAMES_ORDERED]
+G1_HAND_JOINTS_CLOSED_ORDERED = [G1_HAND_JOINTS_CLOSED_DICT.get(name, 0.0) for name in G1_RIGHT_HAND_JOINT_NAMES_ORDERED]
+
 
 ##
 # Scene definition
@@ -65,7 +66,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Table
     packing_table = AssetBaseCfg(
         prim_path="/World/envs/env_.*/PackingTable",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.55, 0.0), rot=(1.0, 0.0, 0.0, 0.0)), # Changed to tuple
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.55, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/packing_table.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -75,14 +76,14 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object
     object = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Object",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 1.0413), rot=(1.0, 0.0, 0.0, 0.0)), # Changed to tuple
-        spawn=sim_utils.CylinderCfg(
-            radius=0.018,
-            height=0.35,
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 1.0413), rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=sim_utils.CylinderCfg( # Using Cylinder as an example, replace with Cube or desired object
+            radius=0.03, # Example for a small cube-like object
+            height=0.06,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.3),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1), # Lighter mass
             collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.15, 0.15, 0.15), metallic=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.15, 0.15, 0.85), metallic=0.2), # Blueish
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 friction_combine_mode="max",
                 restitution_combine_mode="min",
@@ -92,46 +93,64 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             ),
         ),
     )
+    # Alternatively, for a Cube:
+    # object = RigidObjectCfg(
+    #     prim_path="{ENV_REGEX_NS}/Object",
+    #     init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 0.8), rot=(1.0, 0.0, 0.0, 0.0)), # Adjusted height for cube
+    #     spawn=sim_utils.CubeCfg(
+    #         size=(0.05, 0.05, 0.05), # 5cm cube
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.85, 0.15, 0.15), metallic=0.2), # Reddish
+    #         physics_material=sim_utils.RigidBodyMaterialCfg(
+    #             friction_combine_mode="max",
+    #             restitution_combine_mode="min",
+    #             static_friction=0.9,
+    #             dynamic_friction=0.9,
+    #             restitution=0.0,
+    #         ),
+    #     ),
+    # )
+
 
     # Humanoid robot w/ arms higher
-    # Use G1_CFG instead of GR1T2_CFG
     robot: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
-        spawn=G1_CFG.spawn, # Use spawn config from G1_CFG
+        spawn=G1_CFG.spawn,
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.74), # Adjusted height for G1 based on unitree.py (as tuple)
-            rot=(0.7071, 0.0, 0.0, 0.7071), # Keep orientation (as tuple)
+            pos=(0.0, 0.0, 0.74),
+            rot=(0.7071, 0.0, 0.0, 0.7071), # Facing +y
             joint_pos={
-                # right-arm (G1 joints)
-                "right_shoulder_pitch_joint": 0.35, # Initial pose from G1_CFG
-                "right_shoulder_roll_joint": -0.16, # Initial pose from G1_CFG
-                "right_shoulder_yaw_joint": 0.0, # Assuming 0 for yaw
-                "right_elbow_pitch_joint": 0.87, # Initial pose from G1_CFG
-                "right_elbow_roll_joint": 0.0, # Assuming 0 for roll
-                # left-arm (G1 joints)
-                "left_shoulder_pitch_joint": 0.35, # Initial pose from G1_CFG
-                "left_shoulder_roll_joint": 0.16, # Initial pose from G1_CFG
-                "left_shoulder_yaw_joint": 0.0, # Assuming 0 for yaw
-                "left_elbow_pitch_joint": 0.87, # Initial pose from G1_CFG
-                "left_elbow_roll_joint": 0.0, # Assuming 0 for roll
-                # hands (G1 joints)
-                "left_one_joint": 1.0,
-                "right_one_joint": -1.0,
-                "left_two_joint": 0.52,
-                "right_two_joint": -0.52,
-                # -- other joints from G1_CFG
+                # Legs (default standing pose from G1_CFG, can be adjusted)
                 ".*_hip_pitch_joint": -0.20,
                 ".*_knee_joint": 0.42,
                 ".*_ankle_pitch_joint": -0.23,
-                "left_shoulder_roll_joint": 0.16,
-                "left_shoulder_pitch_joint": 0.35,
-                "right_shoulder_roll_joint": -0.16,
-                "right_shoulder_pitch_joint": 0.35,
+                # Torso
+                "torso_joint": 0.0,
+                # Left arm (fixed, out of the way or neutral)
+                "left_shoulder_pitch_joint": 0.5, # Example: slightly forward
+                "left_shoulder_roll_joint": 0.3,  # Example: slightly abducted
+                "left_shoulder_yaw_joint": 0.0,
+                "left_elbow_pitch_joint": 1.0,  # Example: bent elbow
+                "left_elbow_roll_joint": 0.0,
+                # Right arm (initial pose for picking, can be adjusted)
+                "right_shoulder_pitch_joint": 0.45, # From G1_CFG: 0.35
+                "right_shoulder_roll_joint": -0.2, # From G1_CFG: -0.16
+                "right_shoulder_yaw_joint": 0.0,
+                "right_elbow_pitch_joint": 1.0,  # From G1_CFG: 0.87
+                "right_elbow_roll_joint": 0.0,
+                # Hands (Open by default, using ordered values)
+                **{name: pos for name, pos in zip(G1_RIGHT_HAND_JOINT_NAMES_ORDERED, G1_HAND_JOINTS_OPEN_ORDERED)},
+                # Left hand joints (can be all zero if fixed open)
+                "left_zero_joint": 0.0, "left_one_joint": 0.0, "left_two_joint": 0.0,
+                "left_three_joint": 0.0, "left_four_joint": 0.0, "left_five_joint": 0.0,
+                "left_six_joint": 0.0,
             },
             joint_vel={".*": 0.0},
         ),
-        actuators=G1_CFG.actuators, # Use actuators from G1_CFG
-        soft_joint_pos_limit_factor=G1_CFG.soft_joint_pos_limit_factor, # Use from G1_CFG
+        actuators=G1_CFG.actuators,
+        soft_joint_pos_limit_factor=G1_CFG.soft_joint_pos_limit_factor,
     )
 
     # Ground plane
@@ -155,83 +174,47 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     pink_ik_cfg = PinkInverseKinematicsActionCfg(
-        # Update controlled joint names for G1 right arm only
-        pink_controlled_joint_names=[
-            # "left_shoulder_pitch_joint",
-            # "left_shoulder_roll_joint",
-            # "left_shoulder_yaw_joint",
-            # "left_elbow_pitch_joint",
-            # "left_elbow_roll_joint",
+        pink_controlled_joint_names=[ # G1 right arm joints
             "right_shoulder_pitch_joint",
             "right_shoulder_roll_joint",
             "right_shoulder_yaw_joint",
             "right_elbow_pitch_joint",
             "right_elbow_roll_joint",
         ],
-        # Joints to be locked in URDF (updated for G1)
-        ik_urdf_fixed_joint_names=[
-            ".*_hip_yaw_joint",
-            ".*_hip_roll_joint",
-            ".*_hip_pitch_joint",
-            ".*_knee_joint",
-            ".*_ankle_pitch_joint",
-            ".*_ankle_roll_joint",
+        ik_urdf_fixed_joint_names=[ # Joints fixed in URDF for IK
+            # Legs
+            ".*_hip_yaw_joint", ".*_hip_roll_joint", ".*_hip_pitch_joint",
+            ".*_knee_joint", ".*_ankle_pitch_joint", ".*_ankle_roll_joint",
+            # Torso
             "torso_joint",
-            # Hand joints (all hand joints are fixed for IK control of the arm pose)
-            "left_five_joint",
-            "left_three_joint",
-            "left_six_joint",
-            "left_four_joint",
-            "left_zero_joint",
-            "left_one_joint",
-            "left_two_joint",
-            "right_five_joint",
-            "right_three_joint",
-            "right_six_joint",
-            "right_four_joint",
-            "right_zero_joint",
-            "right_one_joint",
-            "right_two_joint",
+            # Left Arm (as it's not controlled by this IK setup)
+            "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+            "left_elbow_pitch_joint", "left_elbow_roll_joint",
+            # ALL Hand joints (both left and right)
+            "left_five_joint", "left_three_joint", "left_six_joint", "left_four_joint",
+            "left_zero_joint", "left_one_joint", "left_two_joint",
+            "right_five_joint", "right_three_joint", "right_six_joint", "right_four_joint",
+            "right_zero_joint", "right_one_joint", "right_two_joint",
         ],
-        # Hand joint names for direct control (G1 right hand joints only)
-        hand_joint_names=[
-            "right_five_joint",
-            "right_three_joint",
-            "right_six_joint",
-            "right_four_joint",
-            "right_zero_joint",
-            "right_one_joint",
-            "right_two_joint",
-        ],
-        # the robot in the sim scene we are controlling
+        # Hand joint names for direct control (G1 right hand) - Order matters!
+        hand_joint_names=G1_RIGHT_HAND_JOINT_NAMES_ORDERED,
         asset_name="robot",
-        # Configuration for the IK controller
-        # The frames names are the ones present in the URDF file
-        # The urdf has to be generated from the USD that is being used in the scene
         controller=PinkIKControllerCfg(
             articulation_name="robot",
-            base_link_name="base_link",
-            # Update num_hand_joints for G1 right hand only (7 joints)
-            num_hand_joints=7,
+            base_link_name="base_link", # Or "pelvis" if that's the robot's root for IK
+            num_hand_joints=len(G1_RIGHT_HAND_JOINT_NAMES_ORDERED), # Should be 7
             show_ik_warnings=False,
             variable_input_tasks=[
-                # Update link name for G1 right palm link
-                FrameTask(
+                FrameTask( # Right palm link control
                     "right_palm_link",
-                    position_cost=1.0,  # [cost] / [m]
-                    orientation_cost=1.0,  # [cost] / [rad]
-                    lm_damping=10,  # dampening for solver for step jumps
-                    gain=0.1,
+                    position_cost=1.0,
+                    orientation_cost=1.0,
+                    lm_damping=10.0,
+                    gain=0.1, # Lower gain for smoother movements, adjust as needed
                 ),
-                # Remove left hand task as we only control the right arm
             ],
             fixed_input_tasks=[
-                # COMMENT OUT IF LOCKING WAIST/HEAD
-                # FrameTask(
-                #     "GR1T2_fourier_hand_6dof_head_yaw_link", # Need to update for G1
-                #     position_cost=1.0,  # [cost] / [m]
-                #     orientation_cost=0.05,  # [cost] / [rad]
-                # ),
+                # No fixed tasks for head or other parts for now
             ],
         ),
     )
@@ -245,66 +228,64 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group with state values."""
 
+        # Actions from previous step
         actions = ObsTerm(func=mdp.last_action)
-        robot_joint_pos = ObsTerm(
-            func=base_mdp.joint_pos,
-            params={"asset_cfg": SceneEntityCfg("robot")},
-        )
-        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        # Full robot joint state
+        robot_joint_pos = ObsTerm(func=base_mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot")}) # Use relative for better generalization
+        robot_joint_vel = ObsTerm(func=base_mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot")}) # Use relative
+
+        # Object state (relative to world or end-effector)
         object_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("object")})
-        object_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("object")})
-        robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
+        object_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("object")}) # XYZW
+        object_lin_vel = ObsTerm(func=base_mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("object")})
+        object_ang_vel = ObsTerm(func=base_mdp.root_ang_vel_w, params={"asset_cfg": SceneEntityCfg("object")})
 
-        # Need to update these observation terms for G1
-        # Remove left EEF observations as we only control the right arm
-        # left_eef_pos = ObsTerm(func=mdp.get_left_eef_pos) # Need to check if these functions work for G1
-        # left_eef_quat = ObsTerm(func=mdp.get_left_eef_quat) # Need to check if these functions work for G1
-        right_eef_pos = ObsTerm(func=mdp.get_right_eef_pos) # Need to check if this function works for G1 and uses right_palm_link
-        right_eef_quat = ObsTerm(func=mdp.get_right_eef_quat) # Need to check if this function works for G1 and uses right_palm_link
+        # Right end-effector (palm) state
+        right_eef_pos = ObsTerm(func=mdp.get_right_eef_pos) # World frame
+        right_eef_quat = ObsTerm(func=mdp.get_right_eef_quat) # World frame, XYZW
 
-        # Update hand joint state observation to only include right hand joints
-        hand_joint_state = ObsTerm(func=mdp.get_hand_state) # Need to check if this function works for G1 and uses right hand joints
-        # Removed head_joint_state as it's not needed for this task and not defined in mdp
+        # Relative pose between EEF and Object
+        eef_to_object_pos_rel = ObsTerm(func=mdp.eef_to_object_pos_relative) # Custom obs: object_pos - eef_pos in eef frame
+        eef_to_object_rot_rel = ObsTerm(func=mdp.eef_to_object_rot_relative) # Custom obs: object_rot relative to eef_rot
 
-        object = ObsTerm(func=mdp.object_obs)
+        # Right hand joint state
+        right_hand_joint_pos = ObsTerm(func=mdp.get_right_hand_joint_pos) # Only positions
+        # right_hand_joint_vel = ObsTerm(func=mdp.get_right_hand_joint_vel) # Optional: velocities
+
+        # Optional: Full robot link states (can be large)
+        # robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
+
 
         def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = False
+            self.enable_corruption = False # Typically False for teleop/testing
+            self.concatenate_terms = True # Concatenate all observations into a single vector for the policy
 
 
 @configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
-
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-
-    object_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": 0.5, "asset_cfg": SceneEntityCfg("object")}
+    object_dropped = DoneTerm(
+        func=mdp.object_is_dropped, params={"object_cfg": SceneEntityCfg("object"), "ground_height_thresh": 0.75} # Adjusted for G1 table height
     )
-
-    success = DoneTerm(func=mdp.task_done)
+    # success = DoneTerm(func=mdp.object_reached_target) # Define this in mdp.terminations
 
 
 @configclass
 class EventCfg:
     """Configuration for events."""
-
-    reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
-
-    reset_object = EventTerm(
+    # On reset, randomize object position slightly
+    reset_object_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {
-                "x": [-0.05, 0.0],
-                "y": [0.0, 0.05],
-            },
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("object"),
+            "asset_cfg": SceneEntityCfg("object", body_ids=-1), # refers to the RigidObjectCfg
+            "pose_range": {"x": [-0.1, 0.1], "y": [-0.1, 0.1], "z": [0.0, 0.0]}, # Relative to initial pose
+            "velocity_range": {}, # No initial velocity
         },
     )
+    # Could add robot joint randomization if needed for training
+    # reset_robot_joints = EventTerm(func=mdp.reset_joints_by_offset, mode="reset", params={...})
 
 
 @configclass
@@ -318,49 +299,59 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     # MDP settings
     terminations: TerminationsCfg = TerminationsCfg()
-    events = EventCfg() # EventCfg is defined above
+    events: EventCfg = EventCfg()
 
-    # Unused managers
-    commands = None
-    rewards = None
+    # Rewards - Add a RewardsCfg if you plan to train an RL agent
+    # For teleoperation, rewards are not strictly necessary but can be useful for metrics.
+    # rewards: RewardsCfg = RewardsCfg() # Define RewardsCfg and terms in mdp.rewards
+
+    # Unused managers for basic teleoperation
+    commands = None # Not using curriculum commands for teleop
+    # rewards = None # Rewards can be defined if metrics are desired
     curriculum = None
 
-    # Position of the XR anchor in the world frame
-    xr: XrCfg = XrCfg(
-        anchor_pos=(0.0, 0.0, 0.0),
-        anchor_rot=(0.0, 0.0, 0.0),
-    )
+    # Position of the XR anchor in the world frame (if using XR, else default)
+    xr: XrCfg = XrCfg(anchor_pos=(0.0, 0.0, 0.0), anchor_rot=(0.0, 0.0, 0.0, 1.0)) # w last for quat
 
     # Temporary directory for URDF files
     temp_urdf_dir = tempfile.gettempdir()
 
-    # Idle action to hold robot in default pose (Need to update for G1)
-    # Action format: [right arm pos (3), right arm quat (4), right hand joint pos (7)]
-    idle_action = torch.tensor([
-        0.22878, # Example pos_x (need to verify)
-        0.2536,  # Example pos_y (need to verify)
-        1.0953,  # Example pos_z (need to verify)
-        0.5,     # Example quat_w (need to verify)
-        0.5,     # Example quat_x (need to verify)
-        -0.5,    # Example quat_y (need to verify)
-        0.5,     # Example quat_z (need to verify)
-        # Right hand joint positions (7 joints) - need to verify order and values
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    ])
+    # Idle action for G1: [right_palm_pos (3), right_palm_quat_xyzw (4), right_hand_joint_pos (7)]
+    # Example: robot looking forward, arm slightly forward, hand open
+    # Calculate this based on a desired initial FK pose if possible, or use a safe known pose.
+    # Assuming initial robot pose has right_palm_link at roughly (0.3, -0.2, 0.9) relative to robot base
+    # and orientation is identity relative to robot base (which is rotated 90 deg yaw).
+    # This needs to be in WORLD FRAME or relative to PINK base_link_name if that's how controller is set up.
+    # For now, a placeholder based on initial joint config might be more robust to get from FK.
+    # Let's use a simple example: slightly in front, hand open.
+    # Pos: (0.4, -0.3, 0.9) in world (assuming robot at origin, facing +y)
+    # Quat XYZW: (0, 0, 0, 1) for identity if world frame, or (0,0,sin(pi/4),cos(pi/4)) if matching robot base
+    # For simplicity, let's use values that would keep the arm somewhat neutral.
+    # The values from the prompt were: pos (0.22878, 0.2536, 1.0953)
+    # quat_wxyz (0.5, 0.5, -0.5, 0.5) -> quat_xyzw (0.5, -0.5, 0.5, 0.5)
+    idle_action_pos = [0.3, 0.3, 0.9] # Example world position in front of robot
+    idle_action_quat_xyzw = [0.0, 0.0, 0.7071, 0.7071] # Example: Palm pointing down-forward
+    idle_action_hand = G1_HAND_JOINTS_OPEN_ORDERED # Open hand
+
+    idle_action = torch.tensor(idle_action_pos + idle_action_quat_xyzw + idle_action_hand)
 
 
     def __post_init__(self):
         """Post initialization."""
         # general settings
-        self.decimation = 5
-        self.episode_length_s = 20.0
+        self.decimation = 4 # Control at 60/4 = 15 Hz
+        self.episode_length_s = 30.0 # Longer for pick-place
         # simulation settings
-        self.sim.dt = 1 / 60  # 100Hz
-        self.sim.render_interval = 2
+        self.sim.dt = 1 / 60
+        self.sim.render_interval = self.decimation # Render at control rate
 
         # Convert USD to URDF and change revolute joints to fixed
+        # Ensure G1_CFG.spawn.usd_path is correct
+        if G1_CFG.spawn.usd_path is None:
+            raise ValueError("G1_CFG.spawn.usd_path is not defined. Cannot convert to URDF.")
+
         temp_urdf_output_path, temp_urdf_meshes_output_path = ControllerUtils.convert_usd_to_urdf(
-            self.scene.robot.spawn.usd_path, self.temp_urdf_dir, force_conversion=True
+            G1_CFG.spawn.usd_path, self.temp_urdf_dir, force_conversion=True # Changed self.scene.robot.spawn.usd_path
         )
         ControllerUtils.change_revolute_to_fixed(
             temp_urdf_output_path, self.actions.pink_ik_cfg.ik_urdf_fixed_joint_names
@@ -371,4 +362,4 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
         self.actions.pink_ik_cfg.controller.mesh_path = temp_urdf_meshes_output_path
 
         # Print the path to the generated URDF file
-        print(f"Generated G1 URDF path: {temp_urdf_output_path}")
+        print(f"Generated G1 URDF path for PinkIK: {temp_urdf_output_path}")

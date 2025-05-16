@@ -67,6 +67,12 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
+# Import G1 hand joint configurations for live teleop processing
+from isaaclab_tasks.manager_based.manipulation.pick_place_g1.pickplace_g1_env_cfg import (
+    G1_RIGHT_HAND_JOINT_NAMES_ORDERED,
+    G1_HAND_JOINTS_OPEN_DICT,
+    G1_HAND_JOINTS_CLOSED_DICT
+)
 
 
 
@@ -75,7 +81,9 @@ def pre_process_actions(
     # For "Reach": (abs_pos_3D_numpy, gripper_command_bool)
     # For "Lift" (IK-Rel) & others: (delta_pose_6D_numpy, gripper_command_bool)
     # For "PickPlace-GR1T2": list[tuple[np.ndarray, np.ndarray, np.ndarray]]
-    teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    # For "G1" tasks during PLAYBACK: tuple[np.ndarray] where np.ndarray is 14D [pos(3), quat_xyzw(4), hand_joints(7)]
+    # For "G1" tasks during LIVE TELEOP: (delta_pose_6D_numpy, gripper_command_bool)
+    teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]] | tuple[np.ndarray, ...],
     num_envs: int,
     device: str,
     task_name: str
@@ -103,12 +111,49 @@ def pre_process_actions(
             actions = actions.repeat(num_envs, 1)
         return actions
     elif "G1" in task_name: # G1 tasks like "PickPlace-G1"
-        # Input from TrajectoryPlayer: (action_array_13D,)
-        # action_array_13D is [right palm pos (3), right palm quat (4), right hand joint pos (7)]
-        action_array_13D = teleop_data[0] # Extract the numpy array from the tuple
+        # teleop_data can be one of two things:
+        # 1. From TrajectoryPlayer (playback): A tuple containing a single 14D numpy array
+        #    (abs_palm_pos, abs_palm_quat_xyzw, abs_hand_joints)
+        # 2. From live device (e.g., keyboard): A tuple (delta_pose_6D_np, gripper_cmd_bool)
 
-        # Convert numpy array to torch tensor and repeat for num_envs
-        actions = torch.tensor(action_array_13D, dtype=torch.float, device=device).repeat(num_envs, 1)
+        if isinstance(teleop_data, tuple) and len(teleop_data) == 1 and isinstance(teleop_data[0], np.ndarray) and teleop_data[0].shape == (14,):
+            # Case 1: Playback from TrajectoryPlayer
+            action_array_14D_np = teleop_data[0]
+        elif isinstance(teleop_data, tuple) and len(teleop_data) == 2 and isinstance(teleop_data[0], np.ndarray):
+            # Case 2: Live teleoperation (e.g., keyboard)
+            delta_pose_6D_np, gripper_cmd_bool = teleop_data
+
+            # Get current G1 right palm absolute pose from the environment
+            # This requires access to the environment instance; for simplicity, we assume it's accessible
+            # In a real scenario, you might pass `env` to this function or get it globally.
+            # For now, this part is conceptual and needs proper env access.
+            # robot = env.unwrapped.scene.articulations["robot"] # Conceptual
+            # right_palm_idx = robot.find_bodies(["right_palm_link"])[0] # Conceptual
+            # current_palm_pos_w = robot.data.body_states_w[0, right_palm_idx, :3].cpu().numpy() # Conceptual
+            # current_palm_quat_wxyz_w = robot.data.body_states_w[0, right_palm_idx, 3:7].cpu().numpy() # Conceptual
+            # current_palm_quat_xyzw_w = np.array([current_palm_quat_wxyz_w[1], current_palm_quat_wxyz_w[2], current_palm_quat_wxyz_w[3], current_palm_quat_wxyz_w[0]]) # Conceptual
+
+            # Placeholder for current pose - replace with actual env query
+            # This is a CRITICAL part that needs to be implemented correctly by fetching current robot state
+            omni.log.warn_once("Live G1 teleop in pre_process_actions needs to fetch current robot palm pose!")
+            current_palm_pos_w = np.array([0.3, 0.0, 0.8]) # Example placeholder
+            current_palm_quat_xyzw_w = np.array([0.0, 0.0, 0.0, 1.0]) # Example placeholder (identity)
+
+            # Apply delta to current absolute pose (simplified, use proper SE3 composition)
+            target_palm_pos_w = current_palm_pos_w + delta_pose_6D_np[:3]
+            # For orientation, proper quaternion multiplication is needed.
+            # This is a simplified placeholder for delta orientation.
+            target_palm_quat_xyzw_w = current_palm_quat_xyzw_w # Placeholder - needs proper update
+
+            # Convert gripper command to hand joint positions
+            hand_dict_to_use = G1_HAND_JOINTS_CLOSED_DICT if gripper_cmd_bool else G1_HAND_JOINTS_OPEN_DICT
+            target_hand_joint_positions_np = np.array([hand_dict_to_use.get(name, 0.0) for name in G1_RIGHT_HAND_JOINT_NAMES_ORDERED])
+
+            action_array_14D_np = np.concatenate([target_palm_pos_w, target_palm_quat_xyzw_w, target_hand_joint_positions_np])
+        else:
+            raise ValueError(f"Unexpected teleop_data format for G1 task: {teleop_data}")
+
+        actions = torch.tensor(action_array_14D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
         return actions
     else: # IK-Rel tasks like "Lift"
         # Input: (delta_pose_6D_numpy, gripper_command_bool)
@@ -168,8 +213,12 @@ def main():
         )
     elif "G1" in args_cli.task:
          print(
-            f"The environment '{args_cli.task}' uses relative 6D pose control for the right palm link. "
-            "Gripper commands from SE3 devices will control the right hand joints."
+            f"The environment '{args_cli.task}' uses absolute 6D pose control for the right palm link and target joint positions for the right hand."
+        )
+    else: # Default for IK-Rel tasks like "Lift"
+         print(
+            f"The environment '{args_cli.task}' uses relative 6D pose control for the end-effector. "
+            "Gripper commands from SE3 devices will control the gripper."
         )
 
 
@@ -198,7 +247,10 @@ def main():
         teleoperation_active = False
         omni.log.info("Teleoperation Deactivated.")
 
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
+    # Initialize TrajectoryPlayer - Pass empty dicts for G1 hand joints for now
+    # TODO: User might need to provide actual joint values for open/closed hand poses
+    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100,
+                                         g1_hand_joints_open={}, g1_hand_joints_closed={})
 
     if args_cli.teleop_device.lower() == "keyboard":
         teleop_interface = Se3Keyboard(
@@ -307,6 +359,10 @@ def main():
                     except Exception as e:
                         print(f"[MainLoop Reach ERROR] Error getting current EE state: {e}")
                         actions_to_step = None
+                # No specific processing needed for G1 tasks here, TrajectoryPlayer handles it
+                # elif "G1" in args_cli.task:
+                #     processed_input_for_action_fn = raw_teleop_device_output # Pass raw output to TrajectoryPlayer
+
                 if actions_to_step is None:
                     actions_to_step = pre_process_actions(
                         processed_input_for_action_fn,

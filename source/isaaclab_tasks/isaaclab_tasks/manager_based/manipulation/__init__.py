@@ -6,3 +6,4 @@
 """Manipulation environments for fixed-arm robots."""
 
 from .reach import *  # noqa
+from . import pick_place_g1
