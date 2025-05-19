@@ -28,8 +28,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from . import mdp # Assuming mdp is a sub-module (observations.py, rewards.py, terminations.py)
 
-# Import G1_CFG instead of GR1T2_CFG
-from isaaclab_assets.robots.unitree import G1_CFG  # isort: skip
+# Import G1_29DOF_CFG
+from isaaclab_assets.robots.unitree import G1_29DOF_CFG  # isort: skip
 
 # Pre-defined G1 Hand joint positions for open/closed state
 # IMPORTANT: Verify these joint values and order based on G1's actual model and desired grip
@@ -117,12 +117,12 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Humanoid robot w/ arms higher
     robot: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
-        spawn=G1_CFG.spawn,
+        spawn=G1_29DOF_CFG.spawn,
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.74),
             rot=(0.7071, 0.0, 0.0, 0.7071), # Facing +y
             joint_pos={
-                # Legs (default standing pose from G1_CFG, can be adjusted)
+                # Legs (default standing pose from G1_29DOF_CFG, can be adjusted)
                 ".*_hip_pitch_joint": -0.20,
                 ".*_knee_joint": 0.42,
                 ".*_ankle_pitch_joint": -0.23,
@@ -135,10 +135,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 "left_elbow_pitch_joint": 1.0,  # Example: bent elbow
                 "left_elbow_roll_joint": 0.0,
                 # Right arm (initial pose for picking, can be adjusted)
-                "right_shoulder_pitch_joint": 0.45, # From G1_CFG: 0.35
-                "right_shoulder_roll_joint": -0.2, # From G1_CFG: -0.16
+                "right_shoulder_pitch_joint": 0.45, # From G1_29DOF_CFG: 0.35
+                "right_shoulder_roll_joint": -0.2, # From G1_29DOF_CFG: -0.16
                 "right_shoulder_yaw_joint": 0.0,
-                "right_elbow_pitch_joint": 1.0,  # From G1_CFG: 0.87
+                "right_elbow_pitch_joint": 1.0,  # From G1_29DOF_CFG: 0.87
                 "right_elbow_roll_joint": 0.0,
                 # Hands (Open by default, using ordered values)
                 **{name: pos for name, pos in zip(G1_RIGHT_HAND_JOINT_NAMES_ORDERED, G1_HAND_JOINTS_OPEN_ORDERED)},
@@ -149,8 +149,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             },
             joint_vel={".*": 0.0},
         ),
-        actuators=G1_CFG.actuators,
-        soft_joint_pos_limit_factor=G1_CFG.soft_joint_pos_limit_factor,
+        actuators=G1_29DOF_CFG.actuators,
+        soft_joint_pos_limit_factor=G1_29DOF_CFG.soft_joint_pos_limit_factor,
     )
 
     # Ground plane
@@ -266,7 +266,7 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     object_dropped = DoneTerm(
-        func=mdp.object_is_dropped, params={"object_cfg": SceneEntityCfg("object"), "ground_height_thresh": 0.75} # Adjusted for G1 table height
+        func=mdp.object_dropped, params={"object_cfg": SceneEntityCfg("object"), "ground_height_thresh": 0.75} # Adjusted for G1 table height
     )
     # success = DoneTerm(func=mdp.object_reached_target) # Define this in mdp.terminations
 
@@ -304,7 +304,7 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
     # Rewards - Add a RewardsCfg if you plan to train an RL agent
     # For teleoperation, rewards are not strictly necessary but can be useful for metrics.
     # rewards: RewardsCfg = RewardsCfg() # Define RewardsCfg and terms in mdp.rewards
-
+    rewards = None
     # Unused managers for basic teleoperation
     commands = None # Not using curriculum commands for teleop
     # rewards = None # Rewards can be defined if metrics are desired
@@ -346,12 +346,12 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation # Render at control rate
 
         # Convert USD to URDF and change revolute joints to fixed
-        # Ensure G1_CFG.spawn.usd_path is correct
-        if G1_CFG.spawn.usd_path is None:
-            raise ValueError("G1_CFG.spawn.usd_path is not defined. Cannot convert to URDF.")
+        # Ensure G1_29DOF_CFG.spawn.usd_path is correct
+        if G1_29DOF_CFG.spawn.usd_path is None:
+            raise ValueError("G1_29DOF_CFG.spawn.usd_path is not defined. Cannot convert to URDF.")
 
         temp_urdf_output_path, temp_urdf_meshes_output_path = ControllerUtils.convert_usd_to_urdf(
-            G1_CFG.spawn.usd_path, self.temp_urdf_dir, force_conversion=True # Changed self.scene.robot.spawn.usd_path
+            G1_29DOF_CFG.spawn.usd_path, self.temp_urdf_dir, force_conversion=True # Changed self.scene.robot.spawn.usd_path
         )
         ControllerUtils.change_revolute_to_fixed(
             temp_urdf_output_path, self.actions.pink_ik_cfg.ik_urdf_fixed_joint_names

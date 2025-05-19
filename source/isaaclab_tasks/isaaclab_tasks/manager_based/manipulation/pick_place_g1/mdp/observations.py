@@ -7,9 +7,8 @@
 
 import torch
 
-import isaaclab.utils.torch as torch_utils
+import isaaclab.utils.math as math_utils
 from isaaclab.envs import ManagerBasedEnv
-from isaaclab.envs.mdp.common import last_action # For last_action obs
 
 # Assuming _G1_RIGHT_HAND_JOINT_NAMES_ORDERED is accessible here or defined
 # For simplicity, let's redefine it or ensure it's imported.
@@ -55,7 +54,7 @@ def eef_to_object_pos_relative(env: ManagerBasedEnv):
     eef_pos_w = get_right_eef_pos(env)
     eef_quat_w = get_right_eef_quat(env) # XYZW
 
-    obj_pos_in_eef_frame = torch_utils.quat_rotate_inverse(eef_quat_w, object_pos_w - eef_pos_w)
+    obj_pos_in_eef_frame = math_utils.quat_rotate_inverse(eef_quat_w, object_pos_w - eef_pos_w)
     return obj_pos_in_eef_frame
 
 def eef_to_object_rot_relative(env: ManagerBasedEnv):
@@ -64,7 +63,7 @@ def eef_to_object_rot_relative(env: ManagerBasedEnv):
     eef_quat_w = get_right_eef_quat(env) # XYZW
 
     # Relative_rotation = q_object * conjugate(q_eef)
-    relative_quat = torch_utils.quat_mul(object_rot_w, torch_utils.quat_conjugate(eef_quat_w))
+    relative_quat = math_utils.quat_mul(object_rot_w, math_utils.quat_conjugate(eef_quat_w))
     return relative_quat
 
 # You might need these if you had left arm observations enabled in the config

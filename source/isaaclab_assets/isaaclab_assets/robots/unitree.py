@@ -379,6 +379,49 @@ G1_CFG = ArticulationCfg(
 )
 """Configuration for the Unitree G1 Humanoid robot."""
 
+G1_29DOF_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        # 'Failed to open layer @http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/IsaacLab/Robots/Unitree/G1/G1_with_hand/configuration/g1_29dof_with_hand_rev_1_0_physics.usd@'
+        # https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Unitree/G1/G1_with_hand/configuration/g1_29dof_with_hand_rev_1_0_physics.usd
+        # usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/G1_with_hand/configuration/g1_29dof_with_hand_rev_1_0_physics.usd",
+        usd_path = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Unitree/G1/G1_with_hand/configuration/g1_29dof_with_hand_rev_1_0_physics.usd",
+        activate_contact_sensors=True,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False, solver_position_iteration_count=8, solver_velocity_iteration_count=4
+        ),
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.74),
+        joint_pos={
+            # You can copy the joint_pos dict from G1_CFG or adjust as needed
+            ".*_hip_pitch_joint": -0.20,
+            ".*_knee_joint": 0.42,
+            ".*_ankle_pitch_joint": -0.23,
+            ".*_elbow_pitch_joint": 0.87,
+            "left_shoulder_roll_joint": 0.16,
+            "left_shoulder_pitch_joint": 0.35,
+            "right_shoulder_roll_joint": -0.16,
+            "right_shoulder_pitch_joint": 0.35,
+            "left_one_joint": 1.0,
+            "right_one_joint": -1.0,
+            "left_two_joint": 0.52,
+            "right_two_joint": -0.52,
+        },
+        joint_vel={".*": 0.0},
+    ),
+    soft_joint_pos_limit_factor=0.9,
+    actuators=G1_CFG.actuators,  # Use the same actuators as G1_CFG
+)
+"""Configuration for the Unitree G1 Humanoid robot with 29 DOF."""
 
 G1_MINIMAL_CFG = G1_CFG.copy()
 G1_MINIMAL_CFG.spawn.usd_path = f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1_minimal.usd"

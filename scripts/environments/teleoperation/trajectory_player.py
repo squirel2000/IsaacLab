@@ -25,11 +25,6 @@ class TrajectoryPlayer:
     A trajectory is a sequence of waypoints, where each waypoint includes the
     right palm link's absolute position, orientation (as a quaternion), and the
     target joint positions for the right hand.
-
-    Playback interpolates linearly between positions and uses spherical linear
-    interpolation (Slerp) for orientations. Hand joint positions are held constant
-    between waypoints during playback.
-    Also records joint angles during trajectory playback for analysis.
     """
     def __init__(self, env, device_for_torch, steps_per_segment=100,
                  g1_hand_joints_open: dict = {}, g1_hand_joints_closed: dict = {}):
@@ -62,10 +57,6 @@ class TrajectoryPlayer:
         self.g1_hand_joints_open = g1_hand_joints_open
         self.g1_hand_joints_closed = g1_hand_joints_closed
         # List of right hand joint names for G1.
-        # Based on the provided link list and common hand structures, these are
-        # the likely controllable joints for the right hand.
-        # IMPORTANT: The order of these joint names must match the order expected
-        # by the G1 environment's action space for the hand joints.
         self.right_hand_joint_names = [
             "right_five_joint", "right_three_joint", "right_six_joint",
             "right_four_joint", "right_zero_joint", "right_one_joint",
@@ -263,7 +254,6 @@ class TrajectoryPlayer:
         for wp in self.recorded_waypoints:
             wxyz = wp["palm_orientation_wxyz"]
             palm_orientations_xyzw.append([wxyz[1], wxyz[2], wxyz[3], wxyz[0]])
-
         scipy_rotations = Rotation.from_quat(palm_orientations_xyzw)
 
         num_segments = len(self.recorded_waypoints) - 1
@@ -304,16 +294,12 @@ class TrajectoryPlayer:
         self.joint_tracking_active = True  # Start joint tracking for this playback
         print(f"Playback trajectory prepared with {len(self.playback_trajectory_abs_poses)} steps.")
 
-    def get_formatted_action_for_playback(self, task_name: str):
+    def get_formatted_action_for_playback(self):
         """
         Gets the next action command from the playback trajectory for G1.
 
-        Args:
-            task_name: The name of the current task environment.
-
         Returns:
-            A numpy array representing the action command for the environment,
-            or None if playback is finished.
+            A numpy array representing the action command for the environment, or None if playback is finished.
             Action format: [right palm pos (3), right palm quat (4), right hand joint pos (7)]
         """
         if not self.is_playing_back or self.current_playback_idx >= len(self.playback_trajectory_abs_poses):
@@ -372,9 +358,7 @@ class TrajectoryPlayer:
             target_hand_joint_positions
         ])
 
-        # Return as a tuple containing the single action array
-        # The pre_process_actions function in teleop_se3_agent_g1.py expects a tuple
-        # for playback data, even if it's just one element.
+        
         return (action,)
 
 
