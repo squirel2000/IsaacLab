@@ -26,6 +26,10 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 app_launcher_args = vars(args_cli)
 
+# Import pinocchio before AppLauncher to force the use of the version installed by IsaacLab and
+# not the one installed by Isaac Sim pinocchio is required by the Pink IK controllers and the    
+import pinocchio  # noqa: F401
+
 # launch omniverse app
 app_launcher = AppLauncher(app_launcher_args)
 simulation_app = app_launcher.app
@@ -37,7 +41,7 @@ import numpy as np
 import torch
 
 import omni.log
-import pinocchio  # noqa: F401
+
 
 from isaaclab.devices import Se3Keyboard
 from isaaclab.managers import TerminationTermCfg as DoneTerm

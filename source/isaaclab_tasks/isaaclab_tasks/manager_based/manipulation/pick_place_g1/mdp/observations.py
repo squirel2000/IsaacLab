@@ -5,97 +5,88 @@
 
 """Custom observation terms for G1 pick-and-place."""
 
+from turtle import left, right
 import torch
-
+from isaaclab.envs import ManagerBasedRLEnv
 import isaaclab.utils.math as math_utils
-from isaaclab.envs import ManagerBasedEnv
 
-# Assuming _G1_RIGHT_HAND_JOINT_NAMES_ORDERED is accessible here or defined
-# For simplicity, let's redefine it or ensure it's imported.
 # from .pickplace_g1_env_cfg import _G1_RIGHT_HAND_JOINT_NAMES_ORDERED
 # If that causes circular import, define it here:
 _G1_RIGHT_HAND_JOINT_NAMES_ORDERED_OBS = [
-    "right_five_joint", "right_three_joint", "right_six_joint",
-    "right_four_joint", "right_zero_joint", "right_one_joint",
-    "right_two_joint",
+    "right_hand_thumb_0_joint", "right_hand_thumb_1_joint", "right_hand_thumb_2_joint",
+    "right_hand_index_0_joint", "right_hand_index_1_joint",
+    "right_hand_middle_0_joint", "right_hand_middle_1_joint",
 ]
 
+def object_obs(env:ManagerBasedRLEnv) -> torch.Tensor:
+    """ Object Observations (in world frame):
+        object pos, object quat, left_eef to object, right_eef to object
+    """
+    body_pos_w = env.scene["robot"].data.body_pos_w
+    left_eef_idx = env.scene["robot"].data.body_names.index("left_wrist_yaw_link")
+    right_eef_idx = env.scene["robot"].data.body_names.index("right_wrist_yaw_link")
+    left_eef_pos = body_pos_w[:, left_eef_idx] - env.scene.env_origins
+    right_eef_pos = body_pos_w[:, right_eef_idx] - env.scene.env_origins
+    
+    object_pos = env.scene["object"].data.root_pos_w - env.scene.env_origins
+    object_rot = env.scene["object"].data.root_quat_w
+    
+    left_eef_to_object = object_pos - left_eef_pos
+    right_eef_to_object = object_pos - right_eef_pos
+    
+    return torch.cat((
+        object_pos, object_rot, left_eef_to_object, right_eef_to_object
+        ), dim=-1)
 
-def get_right_eef_pos(env: ManagerBasedEnv) -> torch.Tensor:
+
+def get_right_eef_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Get the right end-effector (palm) position in world frame."""
-    robot = env.scene.articulations["robot"]
-    # Ensure "right_palm_link" is a valid body name in G1's USD/URDF
-    right_palm_indices = robot.find_bodies("right_palm_link")[0] # Get first element if it returns a list of lists
-    return robot.data.body_pos_w[:, right_palm_indices].squeeze(-2) # (num_envs, 3)
+    right_eef_idx = env.scene["robot"].data.body_names.index("right_wrist_yaw_link")
+    body_pos_w = env.scene["robot"].data.body_pos_w
+    right_eef_idx = body_pos_w[:, right_eef_idx] - env.scene.env_origins
+    
+    return right_eef_idx
 
-def get_right_eef_quat(env: ManagerBasedEnv) -> torch.Tensor:
-    """Get the right end-effector (palm) orientation (quat XYZW) in world frame."""
-    robot = env.scene.articulations["robot"]
-    right_palm_indices = robot.find_bodies("right_palm_link")[0]
-    return robot.data.body_rot_w[:, right_palm_indices].squeeze(-2) # (num_envs, 4) XYZW
+def get_right_eef_quat(env: ManagerBasedRLEnv) -> torch.Tensor:    
+    body_quat_w = env.scene["robot"].data.body_quat_w
+    right_eef_idx = env.scene["robot"].data.body_names.index("right_wrist_yaw_link")
+    right_eef_quat = body_quat_w[:, right_eef_idx]
 
-def get_right_hand_joint_pos(env: ManagerBasedEnv) -> torch.Tensor:
-    """Get the G1 right hand joint positions."""
-    robot = env.scene.articulations["robot"]
-    # Order of joints must match _G1_RIGHT_HAND_JOINT_NAMES_ORDERED_OBS
-    joint_ids = robot.find_joints(_G1_RIGHT_HAND_JOINT_NAMES_ORDERED_OBS)[0]
-    return robot.data.joint_pos[:, joint_ids]
+    return right_eef_quat
 
-def get_right_hand_joint_vel(env: ManagerBasedEnv) -> torch.Tensor:
-    """Get the G1 right hand joint velocities."""
-    robot = env.scene.articulations["robot"]
-    joint_ids = robot.find_joints(_G1_RIGHT_HAND_JOINT_NAMES_ORDERED_OBS)[0]
-    return robot.data.joint_vel[:, joint_ids]
+def get_left_eef_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
+    left_eef_idx = env.scene["robot"].data.body_names.index("left_wrist_yaw_link")
+    body_pos_w = env.scene["robot"].data.body_pos_w
+    left_eef_idx = body_pos_w[:, left_eef_idx] - env.scene.env_origins
+    
+    return left_eef_idx
 
-# Example for relative observation (more advanced, requires careful implementation)
-def eef_to_object_pos_relative(env: ManagerBasedEnv):
-    """Object position relative to EEF, expressed in EEF frame."""
-    object_pos_w = env.scene.rigid_objects["object"].data.root_pos_w
-    eef_pos_w = get_right_eef_pos(env)
-    eef_quat_w = get_right_eef_quat(env) # XYZW
+def get_left_eef_quat(env: ManagerBasedRLEnv) -> torch.Tensor:    
+    body_quat_w = env.scene["robot"].data.body_quat_w
+    left_eef_idx = env.scene["robot"].data.body_names.index("left_wrist_yaw_link")
+    left_eef_quat = body_quat_w[:, left_eef_idx]
 
-    obj_pos_in_eef_frame = math_utils.quat_rotate_inverse(eef_quat_w, object_pos_w - eef_pos_w)
-    return obj_pos_in_eef_frame
+    return left_eef_quat
 
-def eef_to_object_rot_relative(env: ManagerBasedEnv):
-    """Object orientation relative to EEF orientation."""
-    object_rot_w = env.scene.rigid_objects["object"].data.root_quat_w # XYZW
-    eef_quat_w = get_right_eef_quat(env) # XYZW
+def get_hand_state(env: ManagerBasedRLEnv) -> torch.Tensor:
+    hand_joint_states = env.scene["robot"].data.joint_pos[:, -14:]  # Hand joints are last 14 entries of joint state
+    return hand_joint_states
 
-    # Relative_rotation = q_object * conjugate(q_eef)
-    relative_quat = math_utils.quat_mul(object_rot_w, math_utils.quat_conjugate(eef_quat_w))
-    return relative_quat
 
-# You might need these if you had left arm observations enabled in the config
-# def get_left_eef_pos(env: ManagerBasedEnv) -> torch.Tensor:
-#     robot = env.scene.articulations["robot"]
-#     left_palm_indices = robot.find_bodies("left_palm_link")[0]
-#     return robot.data.body_pos_w[:, left_palm_indices].squeeze(-2)
+def get_all_robot_link_state(env: ManagerBasedRLEnv) -> torch.Tensor:
+    body_pos_w = env.scene["robot"].data.body_link_state_w[:, :, :]
+    all_robot_link_pos = body_pos_w
 
-# def get_left_eef_quat(env: ManagerBasedEnv) -> torch.Tensor:
-#     robot = env.scene.articulations["robot"]
-#     left_palm_indices = robot.find_bodies("left_palm_link")[0]
-#     return robot.data.body_rot_w[:, left_palm_indices].squeeze(-2)
+    return all_robot_link_pos
 
-def get_all_robot_link_state(env: ManagerBasedEnv) -> torch.Tensor:
-    """Get all robot link states (pos and quat) flattened."""
-    # This can be very high dimensional.
-    # body_pos_w is (num_envs, num_bodies, 3)
-    # body_rot_w is (num_envs, num_bodies, 4)
-    robot = env.scene.articulations["robot"]
-    pos = robot.data.body_pos_w.reshape(env.num_envs, -1)
-    rot = robot.data.body_rot_w.reshape(env.num_envs, -1)
-    # Optionally add velocities too
-    # lin_vel = robot.data.body_lin_vel_w.reshape(env.num_envs, -1)
-    # ang_vel = robot.data.body_ang_vel_w.reshape(env.num_envs, -1)
-    return torch.cat([pos, rot], dim=-1)
 
-# The 'object_obs' from the original prompt can be replaced by the relative ones above or world frame ones.
-# If you need it as originally defined:
-def object_obs_original_style(env: ManagerBasedEnv) -> torch.Tensor:
-    """Get object state relative to right palm link frame (simplified)."""
-    object_pos_w = env.scene.rigid_objects["object"].data.root_pos_w
-    object_rot_w = env.scene.rigid_objects["object"].data.root_quat_w # XYZW
-    palm_pos_w = get_right_eef_pos(env)
-    # This is a simplified relative observation. True relative pose needs frame transformation.
-    return torch.cat([object_pos_w - palm_pos_w, object_rot_w], dim=-1)
+# Available strings: [
+# 'pelvis', 
+# 'left_hip_pitch_link', 'right_hip_pitch_link', 'waist_yaw_link', 
+# 'left_hip_roll_link', 'right_hip_roll_link', 'waist_roll_link', 
+# 'left_hip_yaw_link', 'right_hip_yaw_link', 'torso_link', 
+# 'left_knee_link', 'right_knee_link', 
+# 'left_shoulder_pitch_link', 'right_shoulder_pitch_link', 'left_ankle_pitch_link', 'right_ankle_pitch_link', 'left_shoulder_roll_link', 'right_shoulder_roll_link', 'left_ankle_roll_link', 'right_ankle_roll_link', 'left_shoulder_yaw_link', 'right_shoulder_yaw_link', 'left_elbow_link', 'right_elbow_link', 
+# 'left_wrist_roll_link', 
+# 'right_wrist_roll_link', 'left_wrist_pitch_link', 'right_wrist_pitch_link', 'left_wrist_yaw_link', 'right_wrist_yaw_link', 
+# 'left_hand_index_0_link', 'left_hand_middle_0_link', 'left_hand_thumb_0_link', 'right_hand_index_0_link', 'right_hand_middle_0_link', 'right_hand_thumb_0_link', 'left_hand_index_1_link', 'left_hand_middle_1_link', 'left_hand_thumb_1_link', 'right_hand_index_1_link', 'right_hand_middle_1_link', 'right_hand_thumb_1_link', 'left_hand_thumb_2_link', 'right_hand_thumb_2_link']
