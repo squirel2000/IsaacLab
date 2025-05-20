@@ -62,7 +62,8 @@ def pre_process_actions(
     # PLAYBACK: tuple[np.ndarray] where np.ndarray is 14D [pos(3), quat_xyzw(4), hand_joints(7)]
     teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]] | tuple[np.ndarray, ...],
     num_envs: int,
-    device: str
+    device: str,
+    env: gym.Env,
 ) -> torch.Tensor:
     """Convert teleop data to the format expected by the environment action space."""
     # G1 tasks like "PickPlace-G1"
@@ -71,33 +72,51 @@ def pre_process_actions(
     #    (abs_palm_pos, abs_palm_quat_xyzw, abs_hand_joints)
     # 2. From live device (e.g., keyboard): A tuple (delta_pose_6D_np, gripper_cmd_bool)
 
+    from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat
+    from scipy.spatial.transform import Rotation as R
+
     if isinstance(teleop_data, tuple) and len(teleop_data) == 1 and isinstance(teleop_data[0], np.ndarray) and teleop_data[0].shape == (14,):
-        # Case 1: Playback from TrajectoryPlayer
-        action_array_14D_np = teleop_data[0]
+        # Case 1: Playback from TrajectoryPlayer (old format, right arm/hand only)
+        right_action = teleop_data[0]
+        # Fill left arm/hand with default values (zeros)
+        left_arm_pos = np.zeros(3)
+        left_arm_quat = np.array([1.0, 0.0, 0.0, 0.0])  # identity quaternion xyzw
+        left_hand = np.zeros(7)
+        # right_action: [pos(3), quat(4), hand(7)]
+        action_array_28D_np = np.concatenate([left_arm_pos, left_arm_quat, right_action[:3], right_action[3:7], left_hand, right_action[7:]])
     elif isinstance(teleop_data, tuple) and len(teleop_data) == 2 and isinstance(teleop_data[0], np.ndarray):
         # Case 2: Live teleoperation (e.g., keyboard)
         delta_pose_6D_np, gripper_cmd_bool = teleop_data
+        
+        # Use observation helpers
+        current_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
+        current_right_eef_quat_xyzw_w = get_right_eef_quat(env).cpu().numpy().squeeze()
 
-        # Get current G1 right palm absolute pose from the environment
-        robot = env.unwrapped.scene.articulations["robot"]
-        right_palm_idx = robot.find_bodies(["right_palm_link"])[0]
-        current_palm_pos_w = robot.data.body_states_w[0, right_palm_idx, :3].cpu().numpy()
-        current_palm_quat_wxyz_w = robot.data.body_states_w[0, right_palm_idx, 3:7].cpu().numpy()
-        current_palm_quat_xyzw_w = np.array([current_palm_quat_wxyz_w[1], current_palm_quat_wxyz_w[2], current_palm_quat_wxyz_w[3], current_palm_quat_wxyz_w[0]])
-
-        # Apply delta to current absolute pose (simplified, use proper SE3 composition)
-        target_palm_pos_w = current_palm_pos_w + delta_pose_6D_np[:3]
-        target_palm_quat_xyzw_w = current_palm_quat_xyzw_w # Placeholder - needs proper update
+        # Compose new orientation using axis-angle delta
+        target_right_eef_pos_w = current_right_eef_pos_w + delta_pose_6D_np[:3]
+        delta_rotvec = delta_pose_6D_np[3:6]
+        delta_quat = R.from_rotvec(delta_rotvec).as_quat()  # xyzw
+        target_quat = R.from_quat(delta_quat) * R.from_quat(current_right_eef_quat_xyzw_w)
+        target_right_eef_quat_xyzw_w = target_quat.as_quat()
 
         # Convert gripper command to hand joint positions
         hand_dict_to_use = G1_HAND_JOINTS_CLOSED_DICT if gripper_cmd_bool else G1_HAND_JOINTS_OPEN_DICT
         target_hand_joint_positions_np = np.array([hand_dict_to_use.get(name, 0.0) for name in G1_RIGHT_HAND_JOINT_NAMES_ORDERED])
 
-        action_array_14D_np = np.concatenate([target_palm_pos_w, target_palm_quat_xyzw_w, target_hand_joint_positions_np])
+        # Fill left arm/hand with default values (constant pose)
+        left_arm_pos = np.array([-0.22878, 0.2536, 1.0953,])
+        left_arm_quat = np.array([0.5, 0.5, -0.5, 0.5,])  # identity quaternion xyzw
+        left_hand = np.zeros(7)
+        
+        action_array_28D_np = np.concatenate([
+            left_arm_pos, left_arm_quat,
+            target_right_eef_pos_w, target_right_eef_quat_xyzw_w,
+            left_hand, target_hand_joint_positions_np
+        ])
     else:
         raise ValueError(f"Unexpected teleop_data format for G1 task: {teleop_data}")
 
-    actions = torch.tensor(action_array_14D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
+    actions = torch.tensor(action_array_28D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
     return actions
 
 
@@ -108,13 +127,12 @@ def main():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.env_name = args_cli.task
 
-    # Safely access commands if the attribute exists
-    if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
-        env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
+    # # Safely access commands if the attribute exists
+    # if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
+    #     env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     print(f"The environment '{args_cli.task}' uses absolute 6D pose control for the right palm link and target joint positions for the right hand.")
-
 
     # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
@@ -174,33 +192,13 @@ def main():
             if trajectory_player.is_playing_back:
                 playback_action_tuple = trajectory_player.get_formatted_action_for_playback()
                 if playback_action_tuple is not None:
-                    actions_to_step = pre_process_actions(playback_action_tuple, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'))
+                    actions_to_step = pre_process_actions(playback_action_tuple, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'), env)
             elif teleoperation_active:
                 processed_input_for_action_fn = raw_teleop_device_output
-                # if "Reach" in args_cli.task:
-                #     try:
-                #         if hasattr(env.unwrapped.scene, 'sensors') and "ee_frame" in env.unwrapped.scene.sensors:
-                #             ee_sensor_reach = env.unwrapped.scene.sensors["ee_frame"]
-                #             if hasattr(ee_sensor_reach, 'data') and hasattr(ee_sensor_reach.data, 'target_pos_w'):
-                #                 current_ee_pos_abs_tensor = ee_sensor_reach.data.target_pos_w[0, :3]
-                #             else:
-                #                 current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3]
-                #         else:
-                #             current_ee_pos_abs_tensor = env.unwrapped.scene.articulations["robot"].data.ee_state_w[0, :3]
-                #         current_ee_pos_abs_np = current_ee_pos_abs_tensor.cpu().numpy().squeeze()
-                #         delta_pos_from_device_np = raw_teleop_device_output[0][:3]
-                #         target_abs_pos_for_reach_np = current_ee_pos_abs_np + delta_pos_from_device_np
-                #         processed_input_for_action_fn = (target_abs_pos_for_reach_np, raw_teleop_device_output[1])
-                #     except Exception as e:
-                #         print(f"[MainLoop Reach ERROR] Error getting current EE state: {e}")
-                #         actions_to_step = None
-                # No specific processing needed for G1 tasks here, TrajectoryPlayer handles it
-                # elif "G1" in args_cli.task:
-                #     processed_input_for_action_fn = raw_teleop_device_output # Pass raw output to TrajectoryPlayer
-
                 if actions_to_step is None:
-                    actions_to_step = pre_process_actions(processed_input_for_action_fn, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'))
-
+                    actions_to_step = pre_process_actions(processed_input_for_action_fn, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'), env)
+            
+            
             if actions_to_step is not None:
                 obs, rewards, terminated, truncated, info = env.step(actions_to_step)
             else:
