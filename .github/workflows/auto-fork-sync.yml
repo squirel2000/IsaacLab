@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write              # allow pushes
-  
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -42,16 +42,16 @@ jobs:
       - name: Push main branch changes to my fork
         run: |
           git push origin main
-          
+
       - name: Merge upstream/devel into your fork's devel
         run: |
           git checkout devel
           git merge upstream/devel --allow-unrelated-histories --no-edit || true
-          
+
       - name: Push devel branch changes to your fork
         run: |
           git push origin devel
-          
+
       # - name: Push changes to your fork
       #   env:
       #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
