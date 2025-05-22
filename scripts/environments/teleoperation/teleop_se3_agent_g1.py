@@ -11,8 +11,6 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-from trajectory_player import TrajectoryPlayer # Import the new class
-
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Keyboard teleoperation for Isaac Lab environments.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
@@ -42,20 +40,15 @@ import torch
 
 import omni.log
 
-
 from isaaclab.devices import Se3Keyboard
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
-# Import G1 hand joint configurations for live teleop processing
-from isaaclab_tasks.manager_based.manipulation.pick_place_g1.pickplace_g1_env_cfg import (
-    G1_RIGHT_HAND_JOINT_NAMES_ORDERED,
-    G1_HAND_JOINTS_OPEN_DICT,
-    G1_HAND_JOINTS_CLOSED_DICT
-)
 
-
+from trajectory_player import TrajectoryPlayer
+from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat
+from scipy.spatial.transform import Rotation as R
 
 def pre_process_actions(
     # LIVE TELEOP: (delta_pose_6D_numpy, gripper_command_bool)
@@ -63,61 +56,51 @@ def pre_process_actions(
     teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]] | tuple[np.ndarray, ...],
     num_envs: int,
     device: str,
-    env: gym.Env,
-) -> torch.Tensor:
+    previous_target_right_eef_pos_w: np.ndarray,
+    previous_target_right_eef_quat_wxyz_w: np.ndarray,
+    trajectory_player: TrajectoryPlayer
+) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
     """Convert teleop data to the format expected by the environment action space."""
-    # G1 tasks like "PickPlace-G1"
     # teleop_data can be one of two things:
-    # 1. From TrajectoryPlayer (playback): A tuple containing a single 14D numpy array
-    #    (abs_palm_pos, abs_palm_quat_xyzw, abs_hand_joints)
+    # 1. From TrajectoryPlayer (playback): a single 28D numpy array  [left_arm_eef(7), right_arm_eef(7), hand_joints(14)]) in wxyz
     # 2. From live device (e.g., keyboard): A tuple (delta_pose_6D_np, gripper_cmd_bool)
-
-    from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat
-    from scipy.spatial.transform import Rotation as R
-
-    if isinstance(teleop_data, tuple) and len(teleop_data) == 1 and isinstance(teleop_data[0], np.ndarray) and teleop_data[0].shape == (14,):
-        # Case 1: Playback from TrajectoryPlayer (old format, right arm/hand only)
-        right_action = teleop_data[0]
-        # Fill left arm/hand with default values (zeros)
-        left_arm_pos = np.zeros(3)
-        left_arm_quat = np.array([1.0, 0.0, 0.0, 0.0])  # identity quaternion xyzw
-        left_hand = np.zeros(7)
-        # right_action: [pos(3), quat(4), hand(7)]
-        action_array_28D_np = np.concatenate([left_arm_pos, left_arm_quat, right_action[:3], right_action[3:7], left_hand, right_action[7:]])
-    elif isinstance(teleop_data, tuple) and len(teleop_data) == 2 and isinstance(teleop_data[0], np.ndarray):
-        # Case 2: Live teleoperation (e.g., keyboard)
-        delta_pose_6D_np, gripper_cmd_bool = teleop_data
+    if isinstance(teleop_data, tuple) and len(teleop_data) == 1 and isinstance(teleop_data[0], np.ndarray) and teleop_data[0].shape == (28,):
+        # Case 1: Playback from TrajectoryPlayer
+        action_array_28D_np = teleop_data[0]
+        # Extract right arm data for position tracking
+        target_right_eef_pos_w = action_array_28D_np[7:10]  # Right arm position starts at index 7
+        target_right_eef_quat_wxyz_w = action_array_28D_np[10:14]  # Right arm quaternion starts at index 10
         
-        # Use observation helpers
-        current_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
-        current_right_eef_quat_xyzw_w = get_right_eef_quat(env).cpu().numpy().squeeze()
+    elif isinstance(teleop_data, tuple) and len(teleop_data) == 2 and isinstance(teleop_data[0], np.ndarray):
+        # Case 2: Live teleoperation (e.g., keyboard) for the right arm/hand
+        delta_pose_6D_np, gripper_cmd_bool = teleop_data
 
         # Compose new orientation using axis-angle delta
-        target_right_eef_pos_w = current_right_eef_pos_w + delta_pose_6D_np[:3]
-        delta_rotvec = delta_pose_6D_np[3:6]
-        delta_quat = R.from_rotvec(delta_rotvec).as_quat()  # xyzw
-        target_quat = R.from_quat(delta_quat) * R.from_quat(current_right_eef_quat_xyzw_w)
-        target_right_eef_quat_xyzw_w = target_quat.as_quat()
+        target_right_eef_pos_w = previous_target_right_eef_pos_w + delta_pose_6D_np[:3]
+        delta_quat = R.from_rotvec(delta_pose_6D_np[3:6]).as_quat()  # xyzw
+        target_quat = R.from_quat(delta_quat) * R.from_quat(previous_target_right_eef_quat_wxyz_w)
+        target_right_eef_quat_wxyz_w = target_quat.as_quat()
 
-        # Convert gripper command to hand joint positions
-        hand_dict_to_use = G1_HAND_JOINTS_CLOSED_DICT if gripper_cmd_bool else G1_HAND_JOINTS_OPEN_DICT
-        target_hand_joint_positions_np = np.array([hand_dict_to_use.get(name, 0.0) for name in G1_RIGHT_HAND_JOINT_NAMES_ORDERED])
-
-        # Fill left arm/hand with default values (constant pose)
-        left_arm_pos = np.array([-0.22878, 0.2536, 1.0953,])
-        left_arm_quat = np.array([0.5, 0.5, -0.5, 0.5,])  # identity quaternion xyzw
-        left_hand = np.zeros(7)
+        # Fill left arm with default values (constant pose)
+        left_arm_pose = np.array([-0.22878, 0.2536, 1.0953])
+        left_arm_quat_wxyz = np.array([0.5, 0.5, -0.5, 0.5])  # wxyz
         
-        action_array_28D_np = np.concatenate([
-            left_arm_pos, left_arm_quat,
-            target_right_eef_pos_w, target_right_eef_quat_xyzw_w,
-            left_hand, target_hand_joint_positions_np
-        ])
+        # Create hand joint positions using TrajectoryPlayer's utility function
+        hand_positions = trajectory_player.create_hand_joint_positions(
+            left_hand_bool=True,  # Always True for left hand
+            right_hand_bool=gripper_cmd_bool
+        )
+        
+        # Concatenate all components to form the final action array (wxyz)
+        left_arm_eef = np.concatenate([left_arm_pose, left_arm_quat_wxyz])  # Already in wxyz format
+        right_arm_eef = np.concatenate([target_right_eef_pos_w, target_right_eef_quat_wxyz_w])
+        # [left_arm_eef (7), right_arm_eef (7), hand_positions (14)]
+        action_array_28D_np = np.concatenate([left_arm_eef, right_arm_eef, hand_positions])
     else:
         raise ValueError(f"Unexpected teleop_data format for G1 task: {teleop_data}")
 
     actions = torch.tensor(action_array_28D_np, dtype=torch.float, device=device).repeat(num_envs, 1)
-    return actions
+    return actions, target_right_eef_pos_w, target_right_eef_quat_wxyz_w
 
 
 
@@ -125,14 +108,9 @@ def main():
     """Running keyboard teleoperation with Isaac Lab manipulation environment."""
     # parse configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    env_cfg.env_name = args_cli.task
-
-    # # Safely access commands if the attribute exists
-    # if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
-    #     env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
-    print(f"The environment '{args_cli.task}' uses absolute 6D pose control for the right palm link and target joint positions for the right hand.")
+    print(f"The environment '{args_cli.task}' uses absolute 6D pose control for the right arm eef and right hand.")
 
     # Flags for controlling teleoperation flow
     should_reset_recording_instance = False
@@ -149,11 +127,9 @@ def main():
         else:
             print("[INFO] Environment reset is currently disabled (allow_env_reset=False)")
 
-    # Initialize TrajectoryPlayer - Pass empty dicts for G1 hand joints for now
-    # TODO: User might need to provide actual joint values for open/closed hand poses
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100, g1_hand_joints_open={}, g1_hand_joints_closed={})
-
-    teleop_interface = Se3Keyboard(pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity)
+    # Initialize TrajectoryPlayer and teleoperation interface
+    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
+    teleop_interface = Se3Keyboard(pos_sensitivity=0.005 * args_cli.sensitivity, rot_sensitivity=0.02 * args_cli.sensitivity)
 
     # Trajectory Player callbacks
     last_teleop_output = None   # Store the last teleop output for use in the callback
@@ -177,12 +153,23 @@ def main():
     env.reset()
     teleop_interface.reset()
 
+    # Get initial EE pose to initialize previous target pose
+    previous_target_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
+    previous_target_right_eef_quat_wxyz_w = get_right_eef_quat(env).cpu().numpy().squeeze()
+    
+    from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_left_eef_pos, get_left_eef_quat
+    print("Initial right EE pose:", previous_target_right_eef_pos_w, previous_target_right_eef_quat_wxyz_w)
+    print("Initial left EE pose:", get_left_eef_pos(env).cpu().numpy().squeeze(), get_left_eef_quat(env).cpu().numpy().squeeze())
+
     # Simulation loop
     while simulation_app.is_running():
         with torch.inference_mode():
             if should_reset_recording_instance:
                 env.reset()
-                if hasattr(teleop_interface, "reset"): teleop_interface.reset()
+                teleop_interface.reset()
+                # Re-initialize previous target pose on environment reset
+                previous_target_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
+                previous_target_right_eef_quat_wxyz_w = get_right_eef_quat(env).cpu().numpy().squeeze()
                 should_reset_recording_instance = False
 
             raw_teleop_device_output = teleop_interface.advance()
@@ -192,14 +179,29 @@ def main():
             if trajectory_player.is_playing_back:
                 playback_action_tuple = trajectory_player.get_formatted_action_for_playback()
                 if playback_action_tuple is not None:
-                    actions_to_step = pre_process_actions(playback_action_tuple, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'), env)
+                    actions_to_step, previous_target_right_eef_pos_w, previous_target_right_eef_quat_wxyz_w = pre_process_actions(
+                        playback_action_tuple,
+                        getattr(env, 'num_envs', 1),
+                        getattr(env, 'device', 'cpu'),
+                        previous_target_right_eef_pos_w,
+                        previous_target_right_eef_quat_wxyz_w,
+                        trajectory_player
+                    )
             elif teleoperation_active:
                 processed_input_for_action_fn = raw_teleop_device_output
                 if actions_to_step is None:
-                    actions_to_step = pre_process_actions(processed_input_for_action_fn, getattr(env, 'num_envs', 1), getattr(env, 'device', 'cpu'), env)
+                     actions_to_step, previous_target_right_eef_pos_w, previous_target_right_eef_quat_wxyz_w = pre_process_actions(
+                        processed_input_for_action_fn,
+                        getattr(env, 'num_envs', 1),
+                        getattr(env, 'device', 'cpu'),
+                        previous_target_right_eef_pos_w,
+                        previous_target_right_eef_quat_wxyz_w,
+                        trajectory_player
+                    )
             
             
             if actions_to_step is not None:
+                # actions_to_step: [left_arm_eef(7), right_arm_eef(7), left_hand(7), right_hand(7)]
                 obs, rewards, terminated, truncated, info = env.step(actions_to_step)
             else:
                 env.sim.render()
