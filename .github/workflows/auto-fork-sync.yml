@@ -43,14 +43,14 @@ jobs:
         run: |
           git push origin main
 
-      - name: Merge upstream/devel into your fork's devel
-        run: |
-          git checkout devel
-          git merge upstream/devel --allow-unrelated-histories --no-edit || true
+      # - name: Merge upstream/devel into your fork's devel
+      #   run: |
+      #     git checkout devel
+      #     git merge upstream/devel --allow-unrelated-histories --no-edit || true
 
-      - name: Push devel branch changes to your fork
-        run: |
-          git push origin devel
+      # - name: Push devel branch changes to your fork
+      #   run: |
+      #     git push origin devel
 
       # - name: Push changes to your fork
       #   env:
