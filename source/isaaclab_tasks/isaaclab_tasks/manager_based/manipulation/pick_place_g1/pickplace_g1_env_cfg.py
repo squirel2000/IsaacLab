@@ -71,64 +71,64 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             ),
         ),
     )
-    # # Object 1: Red Cube
-    # object1 = RigidObjectCfg(
-    #     prim_path="{ENV_REGEX_NS}/CubeRed",
-    #     init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.40, 0.35, 1.0413], rot=[1, 0, 0, 0]),
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(0.05, 0.05, 0.05),
-    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(),
-    #         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=1.0),
-    #         physics_material=sim_utils.RigidBodyMaterialCfg(
-    #             friction_combine_mode="max",
-    #             restitution_combine_mode="min",
-    #             static_friction=0.9,
-    #             dynamic_friction=0.9,
-    #             restitution=0.0,
-    #         ),
-    #     ),
-    # )
-    # # Object 2: Green Cube
-    # object2 = RigidObjectCfg(
-    #     prim_path="{ENV_REGEX_NS}/CubeGreen",
-    #     init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.35, 0.45, 1.0413], rot=[1, 0, 0, 0]),
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(0.05, 0.05, 0.05),
-    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(),
-    #         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=1.0),
-    #         physics_material=sim_utils.RigidBodyMaterialCfg(
-    #             friction_combine_mode="max",
-    #             restitution_combine_mode="min",
-    #             static_friction=0.9,
-    #             dynamic_friction=0.9,
-    #             restitution=0.0,
-    #         ),
-    #     ),
-    # )
+    # Object 1: Red Cube
+    object1 = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CubeRed",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.10, 0.35, 1.0413], rot=[1, 0, 0, 0]),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.15),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=1.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+                static_friction=0.9,
+                dynamic_friction=0.9,
+                restitution=0.0,
+            ),
+        ),
+    )
+    # Object 2: Green Cube
+    object2 = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CubeGreen",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.35, 0.45, 1.0413], rot=[1, 0, 0, 0]),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=1.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+                static_friction=0.9,
+                dynamic_friction=0.9,
+                restitution=0.0,
+            ),
+        ),
+    )
 
-    # # Object 3: Blue Cube
-    # object3 = RigidObjectCfg(
-    #     prim_path="{ENV_REGEX_NS}/CubeYellow",
-    #     init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.30, 0.40, 1.0413], rot=[1, 0, 0, 0]),
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(0.05, 0.05, 0.05),
-    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-    #         mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(),
-    #         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), metallic=1.0),
-    #         physics_material=sim_utils.RigidBodyMaterialCfg(
-    #             friction_combine_mode="max",
-    #             restitution_combine_mode="min",
-    #             static_friction=0.9,
-    #             dynamic_friction=0.9,
-    #             restitution=0.0,
-    #         ),
-    #     ),
-    # )
+    # Object 3: Blue Cube
+    object3 = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CubeYellow",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.30, 0.40, 1.0413], rot=[1, 0, 0, 0]),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), metallic=1.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+                static_friction=0.9,
+                dynamic_friction=0.9,
+                restitution=0.0,
+            ),
+        ),
+    )
 
     """
     object_table = AssetBaseCfg(
@@ -483,7 +483,7 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
         # general settings
-        self.decimation = 5  # policy update rate 1/60 * 5 Hz = 12 Hz
+        self.decimation = 2  # policy update rate 1/60 * 5 Hz = 12 Hz
         self.episode_length_s = 20.0
         # simulation settings
         self.sim.dt = 1 / 60  # 60 Hz

@@ -370,12 +370,30 @@ class TrajectoryPlayer:
             right_hand_bool: Boolean indicating if right hand should be closed (True) or open (False)
             
         Returns:
-            numpy.ndarray: Array of joint positions (1.0 for closed, 0.0 for open) in the order of self.pink_hand_joint_names
+            numpy.ndarray: Array of joint positions based on the open/closed states of the hands.
         """
+        # Define joint positions for open and closed states
+        joint_positions = {
+            "left_hand_index_0_joint":   {"open": 0.0, "closed": 0.8},
+            "left_hand_middle_0_joint":  {"open": 0.0, "closed": 0.8},
+            "left_hand_thumb_0_joint":   {"open": 0.0, "closed": 0.0},
+            "right_hand_index_0_joint":  {"open": 0.0, "closed": 0.8},
+            "right_hand_middle_0_joint": {"open": 0.0, "closed": 0.8},
+            "right_hand_thumb_0_joint":  {"open": 0.0, "closed": 0.0},
+            "left_hand_index_1_joint":   {"open": 0.0, "closed": 0.8},
+            "left_hand_middle_1_joint":  {"open": 0.0, "closed": 0.8},
+            "left_hand_thumb_1_joint":   {"open": 0.0, "closed": 0.8},
+            "right_hand_index_1_joint":  {"open": 0.0, "closed": 0.8},
+            "right_hand_middle_1_joint": {"open": 0.0, "closed": 0.8},
+            "right_hand_thumb_1_joint":  {"open": 0.0, "closed": -0.8},
+            "left_hand_thumb_2_joint":   {"open": 0.0, "closed": 0.8},
+            "right_hand_thumb_2_joint":  {"open": 0.0, "closed": -0.8},
+        }
+
         hand_joint_positions = np.zeros(len(self.pink_hand_joint_names))
         for idx, joint_name in enumerate(self.pink_hand_joint_names):
             if "right" in joint_name:
-                hand_joint_positions[idx] = 1.0 if right_hand_bool else 0.0
+                hand_joint_positions[idx] = joint_positions[joint_name]["closed"] if right_hand_bool else joint_positions[joint_name]["open"]
             elif "left" in joint_name:
-                hand_joint_positions[idx] = 1.0 if left_hand_bool else 0.0
+                hand_joint_positions[idx] = joint_positions[joint_name]["closed"] if left_hand_bool else joint_positions[joint_name]["open"]
         return hand_joint_positions
