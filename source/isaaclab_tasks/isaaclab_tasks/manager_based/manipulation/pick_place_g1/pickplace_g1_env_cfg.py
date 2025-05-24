@@ -166,10 +166,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             rot=(0.7071, 0, 0, 0.7071),
             joint_pos={
                 # right-arm
-                "right_shoulder_pitch_joint": 0.0,
+                "right_shoulder_pitch_joint": 0.5,  # 0.5
                 "right_shoulder_roll_joint": -0.0,
                 "right_shoulder_yaw_joint": 0.0,
-                "right_elbow_joint": -0.00, # -0.50
+                "right_elbow_joint": -0.50, # -0.50
                 "right_wrist_yaw_joint": 0.0,
                 "right_wrist_roll_joint": 0.0,
                 "right_wrist_pitch_joint": 0.0,
@@ -418,19 +418,19 @@ class EventCfg:
         },
     )
     
-    # reset_cube_red = EventTerm(
-    #     func=mdp.reset_root_state_uniform,
-    #     mode="reset",
-    #     params={
-    #         "pose_range": {
-    #             "x": [-0.05, 0.05],  # +/- 5cm from default x
-    #             "y": [-0.05, 0.05],  # +/- 5cm from default y
-    #             "yaw": [-0.50, 0.50], # +/- 30 degrees
-    #         },
-    #         "velocity_range": {},
-    #         "asset_cfg": SceneEntityCfg("object1"),
-    #     },
-    # )
+    reset_cube_red = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {
+                "x": [-0.03, 0.07],  # +/- 5cm from default x
+                "y": [-0.03, 0.07],  # +/- 5cm from default y
+                "yaw": [-0.50, 0.50], # +/- 30 degrees
+            },
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("object1"),
+        },
+    )
 
 
 @configclass
