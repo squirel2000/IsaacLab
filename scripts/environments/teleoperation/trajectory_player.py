@@ -278,29 +278,21 @@ class TrajectoryPlayer:
         # Get the action array for the current step
         action_array = self.playback_trajectory_actions[self.current_playback_idx]
         self.current_playback_idx += 1
-        print(f"Playback step {self.current_playback_idx}/{len(self.playback_trajectory_actions)}: {action_array}")
+        # print(f"Playback step {self.current_playback_idx}/{len(self.playback_trajectory_actions)}: {action_array}")
 
-        # Record joint states for tracking
+        # Get current simulation time, reference/current joint positions from observation
         try:
-            if hasattr(self.env.unwrapped, 'scene') and hasattr(self.env.unwrapped.scene, 'articulations'):
-                if "robot" in self.env.unwrapped.scene.articulations:
-                    
-                    robot_art = self.env.unwrapped.scene.articulations["robot"]
-                    # Get current joint positions from observation
-                    current_joints = robot_art.data.joint_pos[0].cpu().numpy().tolist()
-                    # For reference joints, use the target/commanded joints from actions
-                    reference_joints = robot_art.data.joint_pos_target[0].cpu().numpy().tolist()
-                    # Get accurate simulation time from robot data
-                    sim_time = float(robot_art.data._sim_timestamp)
-
-                    # Record the joint state
-                    self.record_joint_state(sim_time, reference_joints, current_joints)
+            robot_art = self.env.unwrapped.scene.articulations["robot"]
+            sim_time = float(robot_art.data._sim_timestamp)
+            reference_joints = robot_art.data.joint_pos_target[0].cpu().numpy().tolist()
+            current_joints = robot_art.data.joint_pos[0].cpu().numpy().tolist()
+            
+            self.record_joint_state(sim_time, reference_joints, current_joints)
                     
         except Exception as e:
             omni.log.error(f"[TrajectoryPlayer ERROR] Error recording joint state: {e}")
             import traceback
             traceback.print_exc()
-        
 
         return (action_array,)
 

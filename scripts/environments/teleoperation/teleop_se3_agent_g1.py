@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from typing import cast
 
 from isaaclab.app import AppLauncher
 
@@ -41,13 +42,14 @@ import torch
 import omni.log
 
 from isaaclab.devices import Se3Keyboard
+from isaaclab.envs import ManagerBasedRLEnv # Import ManagerBasedRLEnv
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
 
 from trajectory_player import TrajectoryPlayer
-from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat
+from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat, get_left_eef_pos, get_left_eef_quat
 from scipy.spatial.transform import Rotation as R
 
 def pre_process_actions(
@@ -82,13 +84,13 @@ def pre_process_actions(
         target_right_eef_quat_wxyz_w = target_quat.as_quat()
 
         # Fill left arm with default values (constant pose)
-        left_arm_pose = np.array([-0.22878, 0.2536, 1.0953])
-        left_arm_quat_wxyz = np.array([0.5, 0.5, -0.5, 0.5])  # wxyz
+        left_arm_pose = np.array([-0.14866172,  0.1997742,  0.9152355])
+        left_arm_quat_wxyz = np.array([0.7071744, 0.0000018,  0.00004074, 0.70703906])  # wxyz
         
         # Create hand joint positions using TrajectoryPlayer's utility function
         hand_positions = trajectory_player.create_hand_joint_positions(
-            left_hand_bool=True,  # Always True for left hand
-            right_hand_bool=gripper_cmd_bool
+            left_hand_bool=False,  # Always False for left hand
+            right_hand_bool=bool(gripper_cmd_bool) # Explicitly cast to bool
         )
         
         # Concatenate all components to form the final action array (wxyz)
@@ -109,7 +111,8 @@ def main():
     # parse configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
 
-    env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    # Create environment and get unwrapped instance for direct access
+    env = cast(ManagerBasedRLEnv, gym.make(args_cli.task, cfg=env_cfg).unwrapped)
     print(f"The environment '{args_cli.task}' uses absolute 6D pose control for the right arm eef and right hand.")
 
     # Flags for controlling teleoperation flow
@@ -153,11 +156,14 @@ def main():
     env.reset()
     teleop_interface.reset()
 
+    # Get CubeRed's full pose (position and orientation)
+    cube_red_pos = env.scene["object1"].data.root_pos_w[0].cpu().numpy()
+    cube_red_rot = env.scene["object1"].data.root_quat_w[0].cpu().numpy() # wxyz
+    print("Cube red pos and orient:", cube_red_pos, cube_red_rot)
+    
     # Get initial EE pose to initialize previous target pose
     previous_target_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
     previous_target_right_eef_quat_wxyz_w = get_right_eef_quat(env).cpu().numpy().squeeze()
-    
-    from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_left_eef_pos, get_left_eef_quat
     print("Initial right EE pose:", previous_target_right_eef_pos_w, previous_target_right_eef_quat_wxyz_w)
     print("Initial left EE pose:", get_left_eef_pos(env).cpu().numpy().squeeze(), get_left_eef_quat(env).cpu().numpy().squeeze())
 

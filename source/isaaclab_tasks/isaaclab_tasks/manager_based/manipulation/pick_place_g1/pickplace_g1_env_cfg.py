@@ -44,7 +44,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Table
     packing_table = AssetBaseCfg(
         prim_path="/World/envs/env_.*/PackingTable",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.55, -0.15], rot=[1.0, 0.0, 0.0, 0.0]),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.55, -0.15), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/packing_table.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -54,7 +54,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object
     object = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Object",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.35, 0.40, 1.0413], rot=[1, 0, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CylinderCfg(
             radius=0.018,
             height=0.15,
@@ -74,7 +74,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object 1: Red Cube
     object1 = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CubeRed",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.10, 0.35, 1.0413], rot=[1, 0, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.10, 0.33, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.15),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -93,7 +93,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object 2: Green Cube
     object2 = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CubeGreen",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.35, 0.45, 1.0413], rot=[1, 0, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.45, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -113,7 +113,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object 3: Blue Cube
     object3 = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CubeYellow",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[-0.30, 0.40, 1.0413], rot=[1, 0, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.30, 0.40, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -133,7 +133,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     """
     object_table = AssetBaseCfg(
         prim_path="/World/envs/env_.*/ShopTable",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 1.6, 0.0], rot=[1.0, 0.0, 0.0, 0.0]),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 1.6, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Samples/Examples/FrankaNutBolt/SubUSDs/Shop_Table/Shop_Table.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -142,7 +142,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     )
     object_can = RigidObjectCfg(
         prim_path="/World/envs/env_.*/ChefCan",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.1, 1.0, 0.9], rot=[1.0, 0.0, 0.0, 0.0]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.1, 1.0, 0.9), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path="D:/chef_can.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -151,7 +151,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     )
     test_env = AssetBaseCfg(
         prim_path="/World/envs/env_.*/TestEnv",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.0, 0.0, 0.0], rot=[1.0, 0.0, 0.0, 0.0]),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path="D:/test_env.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -169,7 +169,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                 "right_shoulder_pitch_joint": 0.0,
                 "right_shoulder_roll_joint": -0.0,
                 "right_shoulder_yaw_joint": 0.0,
-                "right_elbow_joint": -0.0,
+                "right_elbow_joint": -0.00, # -0.50
                 "right_wrist_yaw_joint": 0.0,
                 "right_wrist_roll_joint": 0.0,
                 "right_wrist_pitch_joint": 0.0,
@@ -417,6 +417,20 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("object"),
         },
     )
+    
+    # reset_cube_red = EventTerm(
+    #     func=mdp.reset_root_state_uniform,
+    #     mode="reset",
+    #     params={
+    #         "pose_range": {
+    #             "x": [-0.05, 0.05],  # +/- 5cm from default x
+    #             "y": [-0.05, 0.05],  # +/- 5cm from default y
+    #             "yaw": [-0.50, 0.50], # +/- 30 degrees
+    #         },
+    #         "velocity_range": {},
+    #         "asset_cfg": SceneEntityCfg("object1"),
+    #     },
+    # )
 
 
 @configclass
@@ -440,7 +454,7 @@ class PickPlaceG1EnvCfg(ManagerBasedRLEnvCfg):
     # Position of the XR anchor in the world frame
     xr: XrCfg = XrCfg(
         anchor_pos=(0.0, 0.0, 0.0),
-        anchor_rot=(1.0, 0.0, 0.0, 0.0),
+        anchor_rot=(0.0, 0.0, 0.0),
     )
 
     # Temporary directory for URDF files
