@@ -10,16 +10,31 @@ import os
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
+from typing import TYPE_CHECKING
+
 
 import omni.log
 
 from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat, get_left_eef_pos, get_left_eef_quat
 
+# === Constants for G1 Trajectory Generation ===
+# Default left arm pose (absolute, wxyz quaternion)
+DEFAULT_LEFT_ARM_POS_W = np.array([-0.14866172, 0.1997742, 0.9152355])
+DEFAULT_LEFT_ARM_QUAT_WXYZ_W = np.array([0.7071744, 0.0000018, 0.00004074, 0.70703906])  # wxyz
+DEFAULT_LEFT_HAND_BOOL = False  # False for open
 
-# Default paths for saving/loading data
+# Constants for RED_PLATE pose
+RED_PLATE_XY_POS = np.array([0.250, 0.200])
+# Z will be determined dynamically based on grasp height
+RED_PLATE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0])  # Identity quaternion (w,x,y,z)
+
+# For type hinting GraspPoseCalculator
+if TYPE_CHECKING:
+    from grasp_pose_calculator import GraspPoseCalculator
+
+
 WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
 JOINT_TRACKING_LOG_PATH = os.path.join("logs", "teleoperation", "joint_tracking_log.json")
-
 
 # Quaternion conversion utilities
 def quat_xyzw_to_wxyz(q):
@@ -389,3 +404,91 @@ class TrajectoryPlayer:
             elif "left" in joint_name:
                 hand_joint_positions[idx] = joint_positions[joint_name]["closed"] if left_hand_bool else joint_positions[joint_name]["open"]
         return hand_joint_positions
+
+    def generate_auto_grasp_pick_place_trajectory(
+        self,
+        current_right_eef_pos_w: np.ndarray,
+        current_right_eef_quat_wxyz_w: np.ndarray,
+        cube_pos_w: np.ndarray,
+        cube_quat_wxyz_w: np.ndarray,
+        grasp_calculator: "GraspPoseCalculator",
+    ):
+        """
+        Generates a predefined 7-waypoint trajectory for grasping a cube and placing it.
+        The waypoints are stored in self.recorded_waypoints.
+        """
+        self.clear_waypoints()
+
+        # 1. Calculate target grasp pose for the right EEF
+        target_grasp_right_eef_pos_w, target_grasp_right_eef_quat_wxyz_w = \
+            grasp_calculator.calculate_target_ee_pose(cube_pos_w, cube_quat_wxyz_w)
+        omni.log.info(f"Calculated Target Grasp Right EEF Pose: pos={target_grasp_right_eef_pos_w}, quat_wxyz={target_grasp_right_eef_quat_wxyz_w}")
+
+        # Waypoint 1: Current EEF pose (right hand open)
+        wp1_left_arm_eef = np.concatenate([DEFAULT_LEFT_ARM_POS_W, DEFAULT_LEFT_ARM_QUAT_WXYZ_W])
+        wp1_right_arm_eef = np.concatenate([current_right_eef_pos_w, current_right_eef_quat_wxyz_w])
+        waypoint1 = {
+            "left_arm_eef": wp1_left_arm_eef,
+            "right_arm_eef": wp1_right_arm_eef,
+            "left_hand_bool": int(DEFAULT_LEFT_HAND_BOOL),
+            "right_hand_bool": 0
+        }
+        self.recorded_waypoints.append(waypoint1)
+
+        # Waypoint 2: Target grasp EEF pose (right hand open - pre-grasp)
+        wp2_left_arm_eef = np.concatenate([DEFAULT_LEFT_ARM_POS_W, DEFAULT_LEFT_ARM_QUAT_WXYZ_W])
+        wp2_right_arm_eef = np.concatenate([target_grasp_right_eef_pos_w, target_grasp_right_eef_quat_wxyz_w])
+        waypoint2 = {
+            "left_arm_eef": wp2_left_arm_eef,
+            "right_arm_eef": wp2_right_arm_eef,
+            "left_hand_bool": int(DEFAULT_LEFT_HAND_BOOL),
+            "right_hand_bool": 0
+        }
+        self.recorded_waypoints.append(waypoint2)
+
+        # Waypoint 3: Target grasp EEF pose (right hand closed - grasp)
+        waypoint3 = {**waypoint2, "right_hand_bool": 1}
+        self.recorded_waypoints.append(waypoint3)
+
+        # Define RED_PLATE pose based on dynamic Z from grasp
+        red_plate_target_pos_w = np.array([RED_PLATE_XY_POS[0], RED_PLATE_XY_POS[1], target_grasp_right_eef_pos_w[2]])
+
+        # Waypoint 4: Intermediate lift pose
+        lift_pos_x = (target_grasp_right_eef_pos_w[0] + red_plate_target_pos_w[0]) / 2
+        lift_pos_y = (target_grasp_right_eef_pos_w[1] + red_plate_target_pos_w[1]) / 2
+        lift_pos_z = (target_grasp_right_eef_pos_w[2] + red_plate_target_pos_w[2]) / 2 + 0.05
+        lift_pos_w = np.array([lift_pos_x, lift_pos_y, lift_pos_z])
+
+        quat_grasp_xyzw = target_grasp_right_eef_quat_wxyz_w[[1, 2, 3, 0]]
+        quat_red_plate_xyzw = RED_PLATE_QUAT_WXYZ[[1, 2, 3, 0]]
+        key_rots = Rotation.from_quat([quat_grasp_xyzw, quat_red_plate_xyzw])
+        slerp_interpolator = Slerp([0, 1], key_rots)
+        lift_quat_xyzw = slerp_interpolator(0.5).as_quat()
+        lift_quat_wxyz_w = lift_quat_xyzw[[3, 0, 1, 2]]
+
+        waypoint4 = {
+            "left_arm_eef": wp2_left_arm_eef,
+            "right_arm_eef": np.concatenate([lift_pos_w, lift_quat_wxyz_w]),
+            "left_hand_bool": int(DEFAULT_LEFT_HAND_BOOL),
+            "right_hand_bool": 1
+        }
+        self.recorded_waypoints.append(waypoint4)
+
+        # Waypoint 5: Move right arm EEF to RED_PLATE pose (hand closed)
+        waypoint5 = {
+            "left_arm_eef": wp2_left_arm_eef,
+            "right_arm_eef": np.concatenate([red_plate_target_pos_w, RED_PLATE_QUAT_WXYZ]),
+            "left_hand_bool": int(DEFAULT_LEFT_HAND_BOOL),
+            "right_hand_bool": 1
+        }
+        self.recorded_waypoints.append(waypoint5)
+
+        # Waypoint 6: At RED_PLATE pose, open right hand
+        waypoint6 = {**waypoint5, "right_hand_bool": 0}
+        self.recorded_waypoints.append(waypoint6)
+
+        # Waypoint 7: Move the right arm to the initial pose (hand open)
+        waypoint7 = {**waypoint1, "right_hand_bool": 0} # Uses wp1's arm poses, ensures hand is open
+        self.recorded_waypoints.append(waypoint7)
+
+        omni.log.info(f"Generated {len(self.recorded_waypoints)} waypoints for auto grasp and place.")
