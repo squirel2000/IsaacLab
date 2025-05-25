@@ -59,7 +59,7 @@ class TrajectoryPlayer:
     right palm link's absolute position, orientation (as a quaternion), and the
     target joint positions for the right hand.
     """
-    def __init__(self, env, device_for_torch, steps_per_segment=100):
+    def __init__(self, env, steps_per_segment=100):
         """
         Initializes the TrajectoryPlayer for G1.
 
@@ -71,7 +71,6 @@ class TrajectoryPlayer:
                                interpolating between two consecutive waypoints
         """
         self.env = env
-        self.torch_device = device_for_torch
         # {"left_arm_eef"(7), "right_arm_eef"(7), "left_hand", "right_hand"}
         self.recorded_waypoints = []
         # {"palm_position": np.array, "palm_orientation_wxyz": np.array, "hand_joint_positions": np.array}
@@ -405,17 +404,28 @@ class TrajectoryPlayer:
                 hand_joint_positions[idx] = joint_positions[joint_name]["closed"] if left_hand_bool else joint_positions[joint_name]["open"]
         return hand_joint_positions
 
-    def generate_auto_grasp_pick_place_trajectory(
-        self,
-        current_right_eef_pos_w: np.ndarray,
-        current_right_eef_quat_wxyz_w: np.ndarray,
-        cube_pos_w: np.ndarray,
-        cube_quat_wxyz_w: np.ndarray,
-    ):
+    def _extract_poses_from_obs(self, obs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Extracts relevant poses from the observation dictionary."""
+        current_right_eef_pos_w = obs["policy"]["right_eef_pos"][0].cpu().numpy()
+        current_right_eef_quat_wxyz_w = obs["policy"]["right_eef_quat"][0].cpu().numpy()
+        cube_pos_w = obs["policy"]["cube_pos"][0].cpu().numpy()
+        cube_quat_wxyz_w = obs["policy"]["cube_rot"][0].cpu().numpy()
+        # cube_color_rgb = obs["policy"]["cube_color"][0].cpu().numpy() # If needed in the future
+
+        print(f"Current Right EEF Pose: pos={current_right_eef_pos_w}, quat_wxyz={current_right_eef_quat_wxyz_w}")
+        print(f"Target Cube Pose: pos={cube_pos_w}, quat_wxyz={cube_quat_wxyz_w}")
+        # print(f"Target Cube Pose: pos={cube_pos_w}, quat_wxyz={cube_quat_wxyz_w}, color={cube_color_rgb}")
+        return current_right_eef_pos_w, current_right_eef_quat_wxyz_w, cube_pos_w, cube_quat_wxyz_w
+
+    def generate_auto_grasp_pick_place_trajectory(self, obs: dict):
         """
         Generates a predefined 7-waypoint trajectory for grasping a cube and placing it.
         The waypoints are stored in self.recorded_waypoints.
+
+        Args:
+            obs: The observation dictionary from the environment, containing current robot and object states.
         """
+        current_right_eef_pos_w, current_right_eef_quat_wxyz_w, cube_pos_w, cube_quat_wxyz_w = self._extract_poses_from_obs(obs)
         self.clear_waypoints()
         # 1. Calculate target grasp pose for the right EEF
         target_grasp_right_eef_pos_w, target_grasp_right_eef_quat_wxyz_w = \

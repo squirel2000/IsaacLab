@@ -72,7 +72,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         ),
     )
     # Object 1: Red Cube
-    object1 = RigidObjectCfg(
+    cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CubeRed",
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.10, 0.33, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CuboidCfg(
@@ -357,6 +357,9 @@ class ObservationsCfg:
         robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
         object_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("object")})
         object_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("object")})
+        cube_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("cube")})
+        cube_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("cube")})
+        # cube_color = ObsTerm(func=mdp.get_object1_color_obs, params={"asset_cfg": SceneEntityCfg("cube")})
         robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
 
         left_eef_pos = ObsTerm(func=mdp.get_left_eef_pos)
@@ -418,7 +421,7 @@ class EventCfg:
         },
     )
     
-    reset_cube_red = EventTerm(
+    reset_cube = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
@@ -428,9 +431,29 @@ class EventCfg:
                 "yaw": [-0.50, 0.50], # +/- 30 degrees
             },
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("object1"),
+            "asset_cfg": SceneEntityCfg("cube"),
         },
     )
+    
+    # reset_cube = EventTerm(
+    #     func=mdp.reset_cube_with_random_color,
+    #     mode="reset",
+    #     params={
+    #         "event_params": {  # All original parameters are now nested under "event_params"
+    #             "target_object_id": "object1",
+    #             "pose_range": {
+    #                 "x": [-0.03, 0.07],  # +/- 5cm from default x
+    #                 "y": [-0.03, 0.07],  # +/- 5cm from default y
+    #                 "yaw": [-0.50, 0.50], # +/- 30 degrees
+    #             },
+    #             "velocity_range": {},
+    #             "colors": [
+    #                 (1.0, 0.0, 0.0),  # Red
+    #                 (0.0, 1.0, 0.0),  # Green
+    #             ],
+    #         }
+    #     },
+    # )
 
 
 @configclass
