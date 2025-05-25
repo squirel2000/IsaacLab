@@ -10,33 +10,15 @@ import os
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
-from typing import TYPE_CHECKING
-
 
 import omni.log
-
 from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat, get_left_eef_pos, get_left_eef_quat
 
-# === Constants for G1 Trajectory Generation ===
-# Default left arm pose (absolute, wxyz quaternion)
-DEFAULT_LEFT_ARM_POS_W = np.array([-0.14866172, 0.1997742, 0.9152355])
-DEFAULT_LEFT_ARM_QUAT_WXYZ_W = np.array([0.7071744, 0.0000018, 0.00004074, 0.70703906])  # wxyz
-DEFAULT_LEFT_HAND_BOOL = False  # False for open
-
-# Constants for RED_PLATE pose
-RED_PLATE_XY_POS = np.array([0.250, 0.200])
-# Z will be determined dynamically based on grasp height
-RED_PLATE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0])  # Identity quaternion (w,x,y,z)
-
-# For type hinting GraspPoseCalculator
-if TYPE_CHECKING:
-    from grasp_pose_calculator import GraspPoseCalculator
+# GraspPoseCalculator is now a direct runtime dependency
+from grasp_pose_calculator import GraspPoseCalculator
 
 
-WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
-JOINT_TRACKING_LOG_PATH = os.path.join("logs", "teleoperation", "joint_tracking_log.json")
-
-# Quaternion conversion utilities
+# === Quaternion conversion utilities === 
 def quat_xyzw_to_wxyz(q):
     """Convert quaternion from [x, y, z, w] to [w, x, y, z] order."""
     q = np.asarray(q)
@@ -50,6 +32,23 @@ def quat_wxyz_to_xyzw(q):
     if q.shape[-1] != 4:
         raise ValueError("Quaternion must have 4 elements.")
     return np.array([q[1], q[2], q[3], q[0]]) if q.ndim == 1 else np.stack([q[..., 1], q[..., 2], q[..., 3], q[..., 0]], axis=-1)
+
+
+# === Constants for G1 Trajectory Generation ===
+# Default left arm pose
+DEFAULT_LEFT_ARM_POS_W = np.array([-0.14866172, 0.1997742, 0.9152355])
+DEFAULT_LEFT_ARM_QUAT_WXYZ_W = np.array([0.7071744, 0.0000018, 0.00004074, 0.70703906])  # wxyz
+DEFAULT_LEFT_HAND_BOOL = False  # False for open
+
+# Constants for RED_PLATE pose
+RED_PLATE_XY_POS = np.array([0.100, 0.200])
+# Calculate 80-degree yaw quaternion (wxyz) for RED_PLATE
+yaw_degrees = 80.0
+RED_PLATE_QUAT_WXYZ = quat_xyzw_to_wxyz(Rotation.from_euler('z', yaw_degrees, degrees=True).as_quat())
+
+# Default paths for saving waypoints and joint tracking logs
+WAYPOINTS_JSON_PATH = os.path.join("logs", "teleoperation", "waypoints.json")
+JOINT_TRACKING_LOG_PATH = os.path.join("logs", "teleoperation", "joint_tracking_log.json")
 
 
 class TrajectoryPlayer:
@@ -79,6 +78,7 @@ class TrajectoryPlayer:
         self.playback_trajectory_actions = []
         self.current_playback_idx = 0
         self.is_playing_back = False
+        self.grasp_calculator = GraspPoseCalculator() # Instantiate GraspPoseCalculator
         self.steps_per_segment = steps_per_segment
 
         # Get hand joint names from the action manager
@@ -411,18 +411,16 @@ class TrajectoryPlayer:
         current_right_eef_quat_wxyz_w: np.ndarray,
         cube_pos_w: np.ndarray,
         cube_quat_wxyz_w: np.ndarray,
-        grasp_calculator: "GraspPoseCalculator",
     ):
         """
         Generates a predefined 7-waypoint trajectory for grasping a cube and placing it.
         The waypoints are stored in self.recorded_waypoints.
         """
         self.clear_waypoints()
-
         # 1. Calculate target grasp pose for the right EEF
         target_grasp_right_eef_pos_w, target_grasp_right_eef_quat_wxyz_w = \
-            grasp_calculator.calculate_target_ee_pose(cube_pos_w, cube_quat_wxyz_w)
-        omni.log.info(f"Calculated Target Grasp Right EEF Pose: pos={target_grasp_right_eef_pos_w}, quat_wxyz={target_grasp_right_eef_quat_wxyz_w}")
+            self.grasp_calculator.calculate_target_ee_pose(cube_pos_w, cube_quat_wxyz_w)
+        print(f"Calculated Target Grasp Right EEF Pose: pos={target_grasp_right_eef_pos_w}, quat_wxyz={target_grasp_right_eef_quat_wxyz_w}")
 
         # Waypoint 1: Current EEF pose (right hand open)
         wp1_left_arm_eef = np.concatenate([DEFAULT_LEFT_ARM_POS_W, DEFAULT_LEFT_ARM_QUAT_WXYZ_W])

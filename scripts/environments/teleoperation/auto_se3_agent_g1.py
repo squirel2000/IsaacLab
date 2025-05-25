@@ -36,7 +36,6 @@ import gymnasium as gym
 import numpy as np
 import torch
 import time
-from scipy.spatial.transform import Rotation as R, Slerp
 
 import omni.log
 
@@ -45,12 +44,9 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 from trajectory_player import TrajectoryPlayer
-from grasp_pose_calculator import GraspPoseCalculator
 from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import (
     get_right_eef_pos,
     get_right_eef_quat,
-    get_left_eef_pos, # Though left is fixed, good to have for consistency if needed
-    get_left_eef_quat,
 )
 
 
@@ -58,12 +54,9 @@ def main():
     """Runs automated grasping trajectory with Isaac Lab G1 environment."""
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env = cast(ManagerBasedRLEnv, gym.make(args_cli.task, cfg=env_cfg).unwrapped)
-    print(f"The environment '{args_cli.task}' uses absolute 6D pose control for EEFs and hand joints.")
-
-    grasp_calculator_instance = GraspPoseCalculator() # Instantiate it here
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
 
     # Flag to trigger trajectory generation and playback
+    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
     should_generate_and_play_trajectory = True
 
     print("\n--- Automated Grasping Agent ---")
@@ -73,15 +66,14 @@ def main():
     print("------------------------------------\n")
 
     env.reset()
-
+    iteration = 1
     # Simulation loop
     while simulation_app.is_running():
         with torch.inference_mode():
             if should_generate_and_play_trajectory:
-                omni.log.info("Generating new grasp trajectory...")
-                env.reset() # Reset env to get new cube pose if desired, or ensure clean state
-                omni.log.info("Pausing for 3 seconds to allow environment to stabilize...")
-                time.sleep(3.0)
+                print("Reset and generate new grasp trajectory...")
+                env.reset() # Reset env to reset the cube and arm pose
+                time.sleep(3.0) # Pause to allow environment to stabilize
 
                 # 1. Get current poses
                 current_right_eef_pos_w = get_right_eef_pos(env).cpu().numpy().squeeze()
@@ -98,8 +90,7 @@ def main():
                     current_right_eef_pos_w=current_right_eef_pos_w,
                     current_right_eef_quat_wxyz_w=current_right_eef_quat_wxyz_w,
                     cube_pos_w=cube_red_pos_w,
-                    cube_quat_wxyz_w=cube_red_quat_wxyz_w, 
-                    grasp_calculator=grasp_calculator_instance # Pass the instance
+                    cube_quat_wxyz_w=cube_red_quat_wxyz_w
                 )
                 
                 # 3. Prepare the playback trajectory
@@ -118,8 +109,9 @@ def main():
                         args_cli.num_envs, 1
                     )
                 else: # Playback finished
-                    omni.log.info("Automated trajectory playback finished, and next iteration will start.")
+                    print(f"{iteration} trajectory playback finished, and next iteration will start.\n")
                     should_generate_and_play_trajectory = True
+                    iteration += 1
                     
 
             if actions_to_step is not None:
