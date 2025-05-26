@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as ScipyRotation
+from typing import Optional
 
 class GraspPoseCalculator:
     """
@@ -14,27 +15,28 @@ class GraspPoseCalculator:
     DEFAULT_EE_POS = np.array([0.14865173, 0.1997743, 0.9152356])
     DEFAULT_EE_QUAT_WXYZ = np.array([0.7070392, -0.00004063, -0.00000176, 0.70717436])
 
-    def __init__(self, example_cube_pos_w: np.ndarray = DEFAULT_CUBE_POS,
-                 example_cube_quat_wxyz_w: np.ndarray = DEFAULT_CUBE_QUAT_WXYZ,
-                 example_ee_pos_w: np.ndarray = DEFAULT_EE_POS,
-                 example_ee_quat_wxyz_w: np.ndarray = DEFAULT_EE_QUAT_WXYZ):
+    def __init__(self, example_cube_pos_w: Optional[np.ndarray] = None,
+                 example_cube_quat_wxyz_w: Optional[np.ndarray] = None,
+                 example_ee_pos_w: Optional[np.ndarray] = None,
+                 example_ee_quat_wxyz_w: Optional[np.ndarray] = None):
         """
         Initializes the calculator with an example grasp.
 
         Args:
-            example_cube_pos_w: Position (x, y, z) of the cube in the world frame for the example grasp.
-                                Defaults to a predefined value if None.
-            example_cube_quat_wxyz_w: Orientation (w, x, y, z) of the cube in the world frame for the example grasp.
-                                      Defaults to a predefined value if None.
-            example_ee_pos_w: Position (x, y, z) of the EE in the world frame for the example grasp.
-                              Defaults to a predefined value if None.
-            example_ee_quat_wxyz_w: Orientation (w, x, y, z) of the EE in the world frame for the example grasp.
-                                    Defaults to a predefined value if None.
+            example_cube_pos_w and example_cube_quat_wxyz_w: Position (x, y, z) and orientation (w, x, y, z) of the cube in the world frame for the example grasp.
+            exaple_ee_pos_w and example_ee_quat_wxyz_w: Position (x, y, z) and orientation (w, x, y, z) of the end-effector (EE) in the world frame for the example grasp.
         """
-        self.example_cube_pos_w = np.asarray(example_cube_pos_w if example_cube_pos_w is not None else self.DEFAULT_CUBE_POS)
-        self.example_cube_quat_wxyz_w = np.asarray(example_cube_quat_wxyz_w if example_cube_quat_wxyz_w is not None else self.DEFAULT_CUBE_QUAT_WXYZ)
-        self.example_ee_pos_w = np.asarray(example_ee_pos_w if example_ee_pos_w is not None else self.DEFAULT_EE_POS)
-        self.example_ee_quat_wxyz_w = np.asarray(example_ee_quat_wxyz_w if example_ee_quat_wxyz_w is not None else self.DEFAULT_EE_QUAT_WXYZ)
+        if example_cube_pos_w is None: example_cube_pos_w = GraspPoseCalculator.DEFAULT_CUBE_POS
+        self.example_cube_pos_w = np.asarray(example_cube_pos_w)
+
+        if example_cube_quat_wxyz_w is None: example_cube_quat_wxyz_w = GraspPoseCalculator.DEFAULT_CUBE_QUAT_WXYZ
+        self.example_cube_quat_wxyz_w = np.asarray(example_cube_quat_wxyz_w)
+
+        if example_ee_pos_w is None: example_ee_pos_w = GraspPoseCalculator.DEFAULT_EE_POS
+        self.example_ee_pos_w = np.asarray(example_ee_pos_w)
+
+        if example_ee_quat_wxyz_w is None: example_ee_quat_wxyz_w = GraspPoseCalculator.DEFAULT_EE_QUAT_WXYZ
+        self.example_ee_quat_wxyz_w = np.asarray(example_ee_quat_wxyz_w)
 
         self._compute_relative_grasp_transform()
 
@@ -48,12 +50,7 @@ class GraspPoseCalculator:
 
     def _compute_relative_grasp_transform(self):
         """
-        Computes the transformation from the cube's frame to the EE's frame
-        at the moment of grasp, based on the provided example.
-        This relative transformation (t_ee_in_cube_frame, R_ee_in_cube_frame) is stored.
-        - t_ee_in_cube_frame: Position of EE origin relative to cube origin, expressed in cube's frame.
-        - R_ee_in_cube_frame: Orientation of EE frame relative to cube frame.
-                              (Transforms vectors from EE frame to cube frame).
+        Computes the transformation from the cube's frame to the EE's frame at the moment of grasp.
         """
         # Convert example world poses to scipy Rotation objects
         # R_w_cube_ex: Transforms vectors from example cube frame to world frame
@@ -76,14 +73,8 @@ class GraspPoseCalculator:
         """
         Calculates the target EE pose in the world frame for grasping a cube at a new pose.
 
-        Args:
-            new_cube_pos_w: Position (x, y, z) of the cube at its new location in the world frame.
-            new_cube_quat_wxyz_w: Orientation (w, x, y, z) of the cube at its new location in the world frame.
-
         Returns:
             A tuple (target_ee_pos_w, target_ee_quat_wxyz_w):
-                - target_ee_pos_w: Calculated target position of the EE in the world frame.
-                - target_ee_quat_wxyz_w: Calculated target orientation (w,x,y,z) of the EE in the world frame.
         """
         new_cube_pos_w = np.asarray(new_cube_pos_w)
         new_cube_quat_wxyz_w = np.asarray(new_cube_quat_wxyz_w)
@@ -104,7 +95,7 @@ class GraspPoseCalculator:
 
         return target_ee_pos_w, target_ee_quat_wxyz_w
 
-# --- Example Usage ---
+# --- Example Check ---
 if __name__ == "__main__":
     # Initialize the calculator using default grasp values
     grasp_calculator = GraspPoseCalculator()

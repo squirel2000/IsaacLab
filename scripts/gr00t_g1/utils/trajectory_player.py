@@ -15,7 +15,7 @@ import omni.log
 from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat, get_left_eef_pos, get_left_eef_quat
 
 # GraspPoseCalculator is now a direct runtime dependency
-from grasp_pose_calculator import GraspPoseCalculator
+from .grasp_pose_calculator import GraspPoseCalculator
 
 
 # === Quaternion conversion utilities === 

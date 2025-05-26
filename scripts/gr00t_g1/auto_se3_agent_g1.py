@@ -41,7 +41,7 @@ from isaaclab.envs import ManagerBasedRLEnv
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
-from trajectory_player import TrajectoryPlayer
+from utils.trajectory_player import TrajectoryPlayer
 
 def main():
     """Runs automated grasping trajectory with Isaac Lab G1 environment."""
