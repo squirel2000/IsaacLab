@@ -21,7 +21,7 @@ Reference: https://github.com/unitreerobotics/unitree_ros
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
 
 ##
 # Configuration - Actuators.
@@ -379,6 +379,100 @@ G1_CFG = ArticulationCfg(
 )
 """Configuration for the Unitree G1 Humanoid robot."""
 
+G1_WITH_HAND_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/Unitree/G1/G1_with_hand/g1_29dof_with_hand_rev_1_0.usd",
+        activate_contact_sensors=True,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=4
+            ,fix_root_link=True
+        ),
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.85),
+        joint_pos={".*": 0.0},
+        joint_vel={".*": 0.0},
+    ),
+    soft_joint_pos_limit_factor=0.9,
+    actuators={
+        "trunk": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "waist_.*",
+            ],
+            effort_limit=None,
+            velocity_limit=None,
+            stiffness=None,
+            damping=None,
+        ),
+        "legs": ImplicitActuatorCfg(
+            joint_names_expr=[
+                ".*_hip_.*",
+                ".*_knee_.*",
+                ".*_ankle_.*",
+            ],
+            effort_limit=None,
+            velocity_limit=None,
+            stiffness=None,
+            damping=None,
+        ),
+        "left-arm": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "left_shoulder_.*",
+                "left_elbow_.*",
+                "left_wrist_.*",
+            ],
+            effort_limit=300.0,
+            velocity_limit=100.0,
+            stiffness=None,
+            damping=None,
+            armature={
+                ".*_shoulder_.*": 0.01,
+            },
+        ),
+        "right-arm": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "right_shoulder_.*",
+                "right_elbow_.*",
+                "right_wrist_.*",
+            ],
+            effort_limit=300.0,
+            velocity_limit=100.0,
+            stiffness=None,
+            damping=None,
+            armature={
+                ".*_shoulder_.*": 0.01,
+            },
+        ),
+        "left-hand": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "left_hand_.*",
+            ],
+            effort_limit=None,
+            velocity_limit=None,
+            stiffness=None,
+            damping=None,
+        ),
+        "right-hand": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "right_hand_.*",
+            ],
+            effort_limit=None,
+            velocity_limit=None,
+            stiffness=None,
+            damping=None,
+        ),
+    },
+)
+"""Configuration for the Unitree G1 Humanoid robot with 29 DOF."""
 
 G1_MINIMAL_CFG = G1_CFG.copy()
 G1_MINIMAL_CFG.spawn.usd_path = f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1_minimal.usd"

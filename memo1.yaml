@@ -1,0 +1,117 @@
+
+
+
+
+# Print all attributes of the robot data:
+# for attr in dir(self.env.scene["robot"].data):
+#     if not attr.startswith('_'):
+#         print(attr)
+
+# self.env.scene["robot"].data.joint_pose_target[0].cpu().numpy()
+# self.env.scene["robot"].data.joint_pos[0].cpu().numpy()
+
+
+
+# joint_names = robot_articulation.data.joint_names  # This is usually a list or array of joint names
+# joint_targets = robot_articulation.data.joint_pos_target[0].cpu().numpy()  # For the first environment
+
+# for name, value in zip(joint_names, joint_targets):
+#     print(f"{name}: {value}")
+
+left_hip_pitch_joint: 0.0
+right_hip_pitch_joint: 0.0
+waist_yaw_joint: 0.0
+left_hip_roll_joint: 0.0
+right_hip_roll_joint: 0.0
+waist_roll_joint: 0.0
+left_hip_yaw_joint: 0.0
+right_hip_yaw_joint: 0.0
+waist_pitch_joint: 0.0
+left_knee_joint: 0.0
+right_knee_joint: 0.0
+left_shoulder_pitch_joint: -0.6612064242362976
+right_shoulder_pitch_joint: -0.27751415967941284
+left_ankle_pitch_joint: 0.0
+right_ankle_pitch_joint: 0.0
+left_shoulder_roll_joint: 0.3236537277698517
+right_shoulder_roll_joint: -0.04394982010126114
+left_ankle_roll_joint: 0.0
+right_ankle_roll_joint: 0.0
+left_shoulder_yaw_joint: 0.2714119255542755
+right_shoulder_yaw_joint: -0.04449884966015816
+left_elbow_joint: 0.16397258639335632
+right_elbow_joint: -0.007439512759447098
+left_wrist_roll_joint: -0.4575803279876709
+right_wrist_roll_joint: 0.0422486737370491
+left_wrist_pitch_joint: -1.0019563436508179
+right_wrist_pitch_joint: 0.2778047025203705
+left_wrist_yaw_joint: -0.24940739572048187
+right_wrist_yaw_joint: -0.03259618952870369
+left_hand_index_0_joint: 0.0
+left_hand_middle_0_joint: 0.0
+left_hand_thumb_0_joint: 0.0
+right_hand_index_0_joint: 0.0
+right_hand_middle_0_joint: 0.0
+right_hand_thumb_0_joint: 0.0
+left_hand_index_1_joint: 0.0
+left_hand_middle_1_joint: 1.0
+left_hand_thumb_1_joint: 1.0
+right_hand_index_1_joint: 1.0
+right_hand_middle_1_joint: 1.0
+right_hand_thumb_1_joint: 1.0
+left_hand_thumb_2_joint: 1.0
+right_hand_thumb_2_joint: 1.0
+
+
+
+
+
+        # # Extract gripper command from teleop_output if available
+        # robot_articulation = self.env.scene["robot"]
+        # gripper_command_bool = False
+        # if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
+        #     gripper_command_bool = teleop_output[1]
+        # # Determine target hand joint positions based on gripper command
+        # if gripper_command_bool: # Gripper command is True (close)
+        #     target_hand_joint_positions = np.array([self.g1_hand_joints_closed.get(name, 0.0) for name in self.right_hand_joint_names]) # correct order
+        # else: # Gripper command is False (open)
+        #     target_hand_joint_positions = np.array([self.g1_hand_joints_open.get(name, 0.0) for name in self.right_hand_joint_names])
+
+
+        # # Extract gripper command from teleop_output if available
+        # gripper_command_bool = False
+        # if teleop_output is not None and isinstance(teleop_output, (tuple, list)) and len(teleop_output) > 1:
+        #     gripper_command_bool = teleop_output[1]
+        # # Determine target hand joint positions based on gripper command
+        # if gripper_command_bool: # Gripper command is True (close)
+        #     target_hand_joint_positions = np.array([self.g1_hand_joints_closed.get(name, 0.0) for name in self.right_hand_joint_names]) # correct order
+        # else: # Gripper command is False (open)
+        #     target_hand_joint_positions = np.array([self.g1_hand_joints_open.get(name, 0.0) for name in self.right_hand_joint_names])
+
+
+
+
+                # pink_ik_action_term = env.action_manager._terms["pink_ik_cfg"]
+
+                # # Get the processed actions (task-space actions)
+                # print("Processed actions:", pink_ik_action_term.processed_actions)
+
+                # joint_names = pink_ik_action_term._joint_names  # or pink_ik_action_term.joint_names if available
+                # print("Joint names:", joint_names)
+
+                # # If you want the numpy array:
+                # print("Processed actions (numpy):", pink_ik_action_term.processed_actions.cpu().numpy())
+
+                # processed_actions = pink_ik_action_term.processed_actions
+                # print("Processed actions:", processed_actions)
+
+                # # If there is a computed_joint_targets attribute (check the class!):
+                # if hasattr(pink_ik_action_term, "computed_joint_targets"):
+                #     print("Computed joint targets:", pink_ik_action_term.computed_joint_targets)
+                    
+                # # Retrieve the computed joint targets
+                # pink_ik_action_term = env.action_manager._terms["pink_ik_cfg"]
+                # computed_joint_targets = pink_ik_action_term.computed_joint_targets
+                
+                # joint_names = pink_ik_action_term._joint_names  # or pink_ik_action_term.joint_names
+                # print("Joint names:", joint_names)
