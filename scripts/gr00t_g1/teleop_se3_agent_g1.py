@@ -16,7 +16,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Keyboard teleoperation for Isaac Lab environments.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--teleop_device", type=str, default="keyboard", help="Device for interacting with environment")
-parser.add_argument("--task", type=str, default="Isaac-PickPlace-G1-IK-Rel-v0", help="Name of the task.")
+parser.add_argument("--task", type=str, default="Isaac-PickPlace-G1-IK-Abs-v0", help="Name of the task.")
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Sensitivity factor.")
 
 # append AppLauncher cli args
@@ -48,7 +48,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
 
-from trajectory_player import TrajectoryPlayer
+from utils.trajectory_player import TrajectoryPlayer
 from isaaclab_tasks.manager_based.manipulation.pick_place_g1.mdp.observations import get_right_eef_pos, get_right_eef_quat, get_left_eef_pos, get_left_eef_quat
 from scipy.spatial.transform import Rotation as R
 
@@ -131,7 +131,7 @@ def main():
             print("[INFO] Environment reset is currently disabled (allow_env_reset=False)")
 
     # Initialize TrajectoryPlayer and teleoperation interface
-    trajectory_player = TrajectoryPlayer(env, args_cli.device, steps_per_segment=100)
+    trajectory_player = TrajectoryPlayer(env, steps_per_segment=100)
     teleop_interface = Se3Keyboard(pos_sensitivity=0.005 * args_cli.sensitivity, rot_sensitivity=0.02 * args_cli.sensitivity)
 
     # Trajectory Player callbacks
@@ -157,8 +157,8 @@ def main():
     teleop_interface.reset()
 
     # Get CubeRed's full pose (position and orientation)
-    cube_red_pos = env.scene["object1"].data.root_pos_w[0].cpu().numpy()
-    cube_red_rot = env.scene["object1"].data.root_quat_w[0].cpu().numpy() # wxyz
+    cube_red_pos = env.scene["cube"].data.root_pos_w[0].cpu().numpy()
+    cube_red_rot = env.scene["cube"].data.root_quat_w[0].cpu().numpy() # wxyz
     print("Cube red pos and orient:", cube_red_pos, cube_red_rot)
     
     # Get initial EE pose to initialize previous target pose

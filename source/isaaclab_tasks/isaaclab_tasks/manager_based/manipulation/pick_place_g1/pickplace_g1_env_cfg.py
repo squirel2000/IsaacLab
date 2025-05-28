@@ -74,7 +74,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # Object 1: Red Cube
     cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CubeRed",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.10, 0.33, 1.0413), rot=(1, 0, 0, 0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.15, 0.40, 1.0413), rot=(1, 0, 0, 0)),
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.15),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),

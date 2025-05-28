@@ -14,7 +14,7 @@ import gymnasium as gym # Corrected import
 ##
 
 gym.register(
-    id="Isaac-PickPlace-G1-IK-Rel-v0", # Retained "Rel" in ID for consistency, though action space is absolute
+    id="Isaac-PickPlace-G1-IK-Abs-v0", # Retained "Rel" in ID for consistency, though action space is absolute
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.pickplace_g1_env_cfg:PickPlaceG1EnvCfg",
